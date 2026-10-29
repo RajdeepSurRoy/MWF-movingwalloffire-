@@ -167,13 +167,25 @@ capture void      hold → human → re-check → capture / void
 
 ## Tech stack
 
-**Not decided yet.** Working suggestion: TypeScript end to end — Next.js for the dashboard and shop, a small Node backend for the firewall, SQLite for storage. To be confirmed by the team.
+**LLM: Google Gemini API (free tier)** — used for the shopping agent and the semantic classifier (which returns boolean flags only). Because of free-tier limits:
+
+- Classifier results for test cases are recorded and replayed, so the full battery doesn't call Gemini on every run (this also keeps grading repeatable).
+- The red-team attack generator is throttled.
+- The live demo has a recorded backup in case a rate limit is hit.
+- Free-tier prompts may be used by Google to improve its products, so only simulated shop and test data is ever sent.
+
+**Everything else: not decided yet.** Working suggestion: TypeScript end to end — Next.js for the dashboard and shop, a small Node backend for the firewall, SQLite for storage. To be confirmed by the team.
 
 ## Getting started
 
-Setup instructions will be added once the stack is chosen. Planned conventions:
+Full setup instructions will be added once the stack is chosen. For now:
 
-- Secrets (PayPal client ID/secret, LLM API keys) live **only** in environment variables — never in code, logs, or the frontend. A `.env.example` will list what's needed.
+1. Copy `.env.example` to `.env`.
+2. Fill in your own Gemini key ([Google AI Studio](https://aistudio.google.com/api-keys)) and PayPal **Sandbox** credentials ([PayPal Developer](https://developer.paypal.com)).
+
+Conventions:
+
+- Secrets live **only** in `.env` / environment variables — never in code, logs, the frontend, or chat. `.env` is gitignored.
 - All inputs are validated server-side.
 
 ## Out of scope
