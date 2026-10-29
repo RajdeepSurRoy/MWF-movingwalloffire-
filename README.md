@@ -167,7 +167,7 @@ capture void      hold → human → re-check → capture / void
 
 ## Tech stack
 
-**LLM: Google Gemini API (free tier)** — used for the shopping agent and the semantic classifier (which returns boolean flags only). Because of free-tier limits:
+**LLM: Google Gemini API (free tier)** — used for the shopping agent and the semantic classifier (which returns boolean flags only). Full rules and measurements: [docs/llm-budget.md](docs/llm-budget.md). In short:
 
 - Classifier results for test cases are recorded and replayed, so the full battery doesn't call Gemini on every run (this also keeps grading repeatable).
 - The red-team attack generator is throttled.
