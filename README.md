@@ -2,7 +2,7 @@
 
 **An adaptive payment firewall for AI shopping agents, built on PayPal.**
 
-> Status: **planning / pre-build.** Nothing is implemented yet. This README describes what we are building for the PayPal hackathon (submission deadline **November 15, 2026**). Sections marked *(planned)* are design intent, not working features.
+> Status: **planning / pre-build.** Nothing is implemented yet. This README describes what we are building for the PayPal hackathon (submission deadline **November 15, 2026**). Sections marked *(planned)* are design intent, not working features. The full security design — including how MWF grows beyond payments to all agentic workflows — is in [docs/architecture.md](docs/architecture.md).
 
 ---
 
@@ -19,7 +19,7 @@ The payment that comes out the other end looks perfectly valid: a real merchant,
 Two principles shape the whole project:
 
 1. **Cryptography proves a payment was executed correctly. It can't prove the decision was right.** So we check every purchase against what the user actually asked for.
-2. **An AI model is never the final authority on whether money moves.** Deterministic code decides. AI checks can only make a decision *stricter*, never looser.
+2. **An AI model is never the final authority on whether money moves.** Deterministic code decides. The firewall uses no generative LLM; its one model is a local classifier that can only make a decision *stricter*, never looser.
 
 ---
 
@@ -36,7 +36,7 @@ Every payment the agent proposes goes through the firewall before money moves.
 | **User authorization** | Did the user authorize this kind of purchase? | Deterministic — matches a stored, hashed user mandate |
 | **Spending policy** | Within budget, per-item cap, and time window? | Deterministic |
 | **Merchant & payee** | Is this the allowed merchant? | Deterministic allowlist, exact match (catches lookalikes) |
-| **Semantic intent** | Does the cart match what the user asked for? | Structured check first; AI classifier second, returning **boolean flags only** |
+| **Semantic intent** | Does the cart match what the user asked for? | Structured check against the mandate first; a local injection classifier second, which can only route to **REVIEW** |
 | **Transaction integrity** | Did amount, items, payee or terms change since approval? | Deterministic hash comparison before capture |
 
 Fetched page content is also scanned deterministically for injection artifacts: hidden CSS text, zero-width characters, HTML comments, instruction-like phrases ("ignore previous…"), and fake compliance notices.
@@ -58,13 +58,7 @@ Fetched page content is also scanned deterministically for injection artifacts: 
 }
 ```
 
-Most attacks — including the "headphones" one — are caught by plain code against this mandate. The AI semantic check only covers what structure can't express, and it can only return flags like:
-
-```json
-{ "cart_explained_by_intent": true, "injection_suspected": false, "persuasion_detected": false }
-```
-
-Any risk flag can only move a decision from ALLOW toward REVIEW or BLOCK.
+Most attacks — including the "headphones" one — are caught by plain code against this mandate. The semantic layer only covers what structure can't express. It is a small, non-generative classifier (DeBERTa / Prompt Guard class) that runs on our own server with a pinned version, scores untrusted page content and the user's prompt for injected instructions, and returns a score — no text, no decision. A high score can only move a decision from ALLOW to REVIEW (or quarantine the content); only the deterministic checks can BLOCK or ALLOW. See [docs/architecture.md §4](docs/architecture.md#4-the-three-firewalls).
 
 ### Layer 2 — Adaptive Red-Team Engine *(planned)*
 
@@ -136,7 +130,7 @@ capture void      hold → human → re-check → capture / void
 | Piece | Real or simulated |
 |---|---|
 | Shop website with planted attacks | Simulated (we control it) |
-| AI shopping agent | Real, minimal — one LLM with a single `propose_purchase` tool |
+| AI shopping agent | Real, minimal — one model with a single `propose_purchase` tool (which model: not decided yet; it is the attack victim, not part of the firewall) |
 | Firewall | Real — this is the product |
 | PayPal | Real **Sandbox** |
 | Agent payment protocols (x402, AP2, ACP, MPP) | Not built — the firewall could front these in future |
@@ -167,12 +161,9 @@ capture void      hold → human → re-check → capture / void
 
 ## Tech stack
 
-**LLM: Google Gemini API (free tier)** — used for the shopping agent and the semantic classifier (which returns boolean flags only). Full rules and measurements: [docs/llm-budget.md](docs/llm-budget.md). In short:
+**Firewall: no generative LLM.** Every decision is deterministic code. The only model is a local, version-pinned injection classifier (starting from an off-the-shelf open model) that can only route to REVIEW. Nothing is sent to a third-party AI provider. (An earlier plan to use the Gemini free tier as the semantic classifier was dropped on 2026-11-01.)
 
-- Classifier results for test cases are recorded and replayed, so the full battery doesn't call Gemini on every run (this also keeps grading repeatable).
-- The red-team attack generator is throttled.
-- The live demo has a recorded backup in case a rate limit is hit.
-- Free-tier prompts may be used by Google to improve its products, so only simulated shop and test data is ever sent.
+**Not decided yet:** which model drives the shopping agent and the red-team attack generator. Both sit outside the firewall — the agent is the attack victim, and the attacker side may be creative — so either could use an LLM.
 
 **Everything else: not decided yet.** Working suggestion: TypeScript end to end — Next.js for the dashboard and shop, a small Node backend for the firewall, SQLite for storage. To be confirmed by the team.
 
@@ -181,7 +172,7 @@ capture void      hold → human → re-check → capture / void
 Full setup instructions will be added once the stack is chosen. For now:
 
 1. Copy `.env.example` to `.env`.
-2. Fill in your own Gemini key ([Google AI Studio](https://aistudio.google.com/api-keys)) and PayPal **Sandbox** credentials ([PayPal Developer](https://developer.paypal.com)).
+2. Fill in your own PayPal **Sandbox** credentials ([PayPal Developer](https://developer.paypal.com)).
 
 Conventions:
 
