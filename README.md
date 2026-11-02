@@ -165,14 +165,18 @@ capture void      hold → human → re-check → capture / void
 
 **Not decided yet:** which model drives the shopping agent and the red-team attack generator. Both sit outside the firewall — the agent is the attack victim, and the attacker side may be creative — so either could use an LLM.
 
-**Everything else: not decided yet.** Working suggestion: TypeScript end to end — Next.js for the dashboard and shop, a small Node backend for the firewall, SQLite for storage. To be confirmed by the team.
+**Everything else:** TypeScript end to end on Node 24 (npm workspaces, Fastify for the firewall API, Next.js for the shop and console, SQLite, Vitest), plus a Python sidecar for the neural sensors. Details in [docs/architecture.md §15](docs/architecture.md#15-decisions-and-open-questions).
 
 ## Getting started
 
-Full setup instructions will be added once the stack is chosen. For now:
+Requires Node 24+.
 
-1. Copy `.env.example` to `.env`.
-2. Fill in your own PayPal **Sandbox** credentials ([PayPal Developer](https://developer.paypal.com)).
+1. `npm install`
+2. Copy `.env.example` to `.env` and fill in your own PayPal **Sandbox** credentials ([PayPal Developer](https://developer.paypal.com)).
+3. `npm run typecheck` and `npm test`
+4. `npm run dev:api` starts the firewall API on http://127.0.0.1:8787 (`/healthz` for now).
+
+Repo layout: `packages/` (core, sdk), `apps/` (firewall-api, shop, agent, console), `services/sensors`, `redteam/`, `tests/fixtures/`, `spikes/`. The build order is in [docs/implementation-plan.md](docs/implementation-plan.md).
 
 Conventions:
 

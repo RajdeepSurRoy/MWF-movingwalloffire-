@@ -374,10 +374,15 @@ One compromised rule bundle could block or allow traffic across every customer, 
 | Knowledge-graph GNN for attack linkage now / inline | No real labeled attack graphs before launch; published results are from network intrusion data; too slow and unexplainable for inline use. Deterministic graph queries do the job now; GNN is Phase 2, offline. |
 | Attacks become production rules automatically | An attacker could poison the policy into blocking legitimate traffic. |
 
-## 15. Open questions
+## 15. Decisions and open questions
 
-- Stack (working suggestion: TypeScript end to end, Node backend, SQLite) and whether the neural components run in a Python sidecar or transformers.js.
-- Policy language: Cedar vs OPA/Rego vs our own DSL.
+**Decided 2026-11-02 (M0), for Rajdeep to confirm:**
+
+- **Stack:** TypeScript end to end on Node 24 — npm workspaces monorepo, Fastify for the firewall API, Next.js for the shop and console, SQLite for storage, Vitest for tests.
+- **Neural components:** Python sidecar (FastAPI + sentence-transformers / ONNX Runtime) on Python 3.12/3.13.
+- **Policy rules (Phase 0):** versioned JSON evaluated by a small TypeScript engine; move to Cedar or OPA/Rego in Phase 1.
+
+**Open:**
 - Which model drives the shopping agent (the attack victim) and the red-team generator.
 - Thresholds for embedding similarity and the classifier (set from the legitimate set).
 - Corroboration threshold *k* for global rules, and how tenant trust is computed.

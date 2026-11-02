@@ -29,3 +29,6 @@ Thumbs.db
 
 # Local tooling
 .remember/
+
+# Spike state (payment token ids)
+spikes/**/.state.json
