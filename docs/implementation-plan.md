@@ -31,7 +31,7 @@
 ## M0 — Decisions, skeleton, PayPal spike (Nov 2–3)
 
 1. **Lock the stack.** Recommendation:
-   - TypeScript end to end: **Fastify** for the firewall API, **Next.js** for the shop and console, **SQLite** (via better-sqlite3 or Drizzle) for storage.
+   - TypeScript end to end: **Fastify** for the firewall API, **Next.js** for the shop and console, **SQLite** for storage (Node's built-in `node:sqlite`, so no native build step).
    - **Python sidecar** (FastAPI + sentence-transformers / ONNX Runtime) for the neural sensors — the ML tooling is far easier in Python.
    - **Policy rules as versioned JSON** evaluated by a small TypeScript engine for Phase 0; move to Cedar or OPA in Phase 1.
    - *Done when:* recorded in architecture.md §15 (open questions → decided).
@@ -54,7 +54,7 @@
 5. **PayPal Vault spike (highest risk).** Get a sandbox buyer, save a payment method for the agent, then create order (intent AUTHORIZE) → authorize → capture, and a second order → authorize → void, with no human in the loop.
    - *Done when:* both flows work from a script against the sandbox. **If Vault fails by end of Nov 4**, fall back to the sandbox test card and note it in the README.
 
-## M1 — Core contracts, ledger, test harness (Nov 3–4)
+## M1 — Core contracts, ledger, test harness (Nov 3–4) — done 2026-11-03
 
 1. **Schemas** (zod) in `packages/core`: `Mandate`, `ContextItem` (with trust tag), `ProposedAction`, `Decision` (ALLOW / BLOCK / REVIEW + reasons), `DecisionRecord` (policy version, rule bundle version, model hashes, action hash, graph path).
 2. **Canonical hashing:** a deterministic JSON canonicalizer + SHA-256 for actions and mandates. *Done when:* the same action in different key order gives the same hash (unit test).

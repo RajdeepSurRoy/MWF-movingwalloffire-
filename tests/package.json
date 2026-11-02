@@ -1,0 +1,13 @@
+{
+  "name": "@mwf/tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "harness": "tsx harness/run.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@mwf/core": "0.0.0"
+  }
+}

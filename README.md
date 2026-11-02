@@ -174,7 +174,10 @@ Requires Node 24+.
 1. `npm install`
 2. Copy `.env.example` to `.env` and fill in your own PayPal **Sandbox** credentials ([PayPal Developer](https://developer.paypal.com)).
 3. `npm run typecheck` and `npm test`
-4. `npm run dev:api` starts the firewall API on http://127.0.0.1:8787 (`/healthz` for now).
+4. `npm run harness` runs the test battery (110 ground-truth cases) and prints the attack success rate and false-positive rate.
+5. `npm run keys:create -- <your-name>` prints your own local API key once (only its hash is stored). Put it in `.env` as `MWF_API_KEY`.
+6. `npm run dev:api` starts the firewall API on http://127.0.0.1:8787. `/healthz` is open; every `/v1/*` endpoint needs `Authorization: Bearer <key>`. Until the rules land (M2) every checkpoint fails closed to REVIEW.
+7. `npm run ledger:verify` walks the hash-chained decision ledger.
 
 Repo layout: `packages/` (core, sdk), `apps/` (firewall-api, shop, agent, console), `services/sensors`, `redteam/`, `tests/fixtures/`, `spikes/`. The build order is in [docs/implementation-plan.md](docs/implementation-plan.md).
 

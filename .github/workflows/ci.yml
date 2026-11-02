@@ -20,3 +20,5 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # Report only until M2; switch to `npm run harness -- --strict` once the rules land.
+      - run: npm run harness

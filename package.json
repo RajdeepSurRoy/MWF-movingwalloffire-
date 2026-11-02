@@ -7,12 +7,16 @@
   },
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "tests"
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "vitest run --passWithNoTests",
-    "dev:api": "npm run dev -w @mwf/firewall-api"
+    "dev:api": "npm run dev -w @mwf/firewall-api",
+    "keys:create": "npm run cli -w @mwf/firewall-api -- keys:create",
+    "ledger:verify": "npm run cli -w @mwf/firewall-api -- ledger:verify",
+    "harness": "npm run harness -w @mwf/tests"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

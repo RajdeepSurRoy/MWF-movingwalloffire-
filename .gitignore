@@ -32,3 +32,8 @@ Thumbs.db
 
 # Spike state (payment token ids)
 spikes/**/.state.json
+
+# Local firewall database (SQLite + WAL files)
+data/
+*.db-wal
+*.db-shm
