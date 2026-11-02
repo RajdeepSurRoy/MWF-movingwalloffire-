@@ -8,7 +8,7 @@ Code can't do these: they need an account, a browser login, a decision, or a per
 - [ ] **J + R — Enable Vault** on that sandbox app (app settings → advanced / features → Vault).
 - [ ] **J + R — Note a sandbox personal (buyer) account** under Sandbox → Accounts. You'll log in with it once.
 - [ ] **J — Run the Vault spike** (deadline **end of Nov 4**). Steps in [spikes/paypal-vault/README.md](../spikes/paypal-vault/README.md): `setup` → approve the link in the browser with the sandbox buyer → `token` → `run`. Paste the final "Spike passed" line (not the IDs) in the team chat. If it fails, we fall back to the sandbox test card.
-- [ ] **R — Check GitHub Actions is enabled** on the repo (Settings → Actions → General). The first CI run hasn't appeared yet. Then check the latest push ran green.
+- [x] **R — Check GitHub Actions is enabled.** Done: CI runs on every push (M0 run passed 2026-11-02).
 - [ ] **R — Confirm the stack** recorded in [architecture.md §15](architecture.md#15-decisions-and-open-questions) (TypeScript + Fastify + Next.js + SQLite + Python sensors).
 
 ## Per developer, once
