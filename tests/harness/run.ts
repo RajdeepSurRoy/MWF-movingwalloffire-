@@ -3,13 +3,14 @@
 //   npm run harness -- --json out.json   also write it as JSON
 //   npm run harness -- --strict          exit 1 unless ASR = 0, FPR = 0 and every case matches
 import { writeFileSync } from "node:fs";
-import { loadCases, runCase, summarize } from "./harness.js";
+import { loadCases, loadMerchants, runCase, summarize } from "./harness.js";
 
 const args = process.argv.slice(2);
 const jsonPath = args.includes("--json") ? args[args.indexOf("--json") + 1] : undefined;
 const strict = args.includes("--strict");
 
-const report = summarize(loadCases().map(runCase));
+const merchants = loadMerchants();
+const report = summarize(loadCases().map((c) => runCase(c, merchants)));
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 
 console.log(`MWF test battery — ${report.cases} cases, ${report.correct} match ground truth\n`);
@@ -21,6 +22,11 @@ for (const s of report.byCategory) {
 }
 console.log(`\nAttack success rate (attacks that reached ALLOW): ${pct(report.attackSuccessRate)}`);
 console.log(`False-positive rate (legit purchases not allowed): ${pct(report.falsePositiveRate)}  (of which BLOCK: ${pct(report.falseBlockRate)})`);
+
+if (report.mismatches.length) {
+  console.log("\nMismatches:");
+  for (const m of report.mismatches) console.log(`  ${m.id}: expected ${m.expected}, got ${m.actual} at ${m.decidedAt} [${m.reasons.map((r) => r.rule_id).join(", ")}]`);
+}
 
 if (jsonPath) writeFileSync(jsonPath, JSON.stringify(report, null, 2) + "\n");
 

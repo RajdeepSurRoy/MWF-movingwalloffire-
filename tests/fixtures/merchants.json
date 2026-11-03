@@ -1,0 +1,4 @@
+[
+  { "id": "shop-a", "name": "Shop A", "payee_emails": ["payments@shop-a.example"] },
+  { "id": "shop-b", "name": "Shop B", "payee_emails": ["billing@shop-b.example"] }
+]

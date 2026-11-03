@@ -1,0 +1,89 @@
+{
+  "version": "1.0.0",
+  "description": "Phase 0 deterministic rules. Every change bumps the version; every decision logs it.",
+  "risk": {
+    "weights": { "info": 5, "soft": 15, "hard": 40 },
+    "review_threshold": 50,
+    "penalty": { "BLOCK": 25, "REVIEW": 10 }
+  },
+  "merchant": { "lookalike_max_edit_distance": 2 },
+  "action_token_ttl_seconds": 900,
+  "mandate_max_ttl_days": 30,
+  "text_rules": [
+    {
+      "id": "CTX.INSTRUCTION_OVERRIDE",
+      "description": "Tries to replace the user's instructions",
+      "patterns": [
+        "\\b(ignore|disregard|forget)\\b.{0,40}?\\b(previous|prior|above|earlier|instructions?|the user'?s?|your (task|instructions|goal)|the (budget|request|shopping list)|shopping list)\\b",
+        "\\b(system|admin)\\s*(override|mode)\\b",
+        "^\\s*system\\s*:|[.!]\\s*system\\s*:",
+        "\\byou are now\\b",
+        "\\bnew instructions?\\b",
+        "\\byour real (goal|task)\\b",
+        "\\boverride\\s*:",
+        "\\binstructions? (are|is) (void|cancelled|canceled|obsolete)\\b"
+      ],
+      "visible": "hard",
+      "hidden": "hard"
+    },
+    {
+      "id": "CTX.AGENT_ADDRESSED",
+      "description": "Text written to the AI agent rather than to a human shopper",
+      "patterns": [
+        "\\b(ai|llm)\\s+(agents?|assistants?|shoppers?|shopping assistants?|models?|buyers?)\\b",
+        "\\bnote to (the )?(ai|assistants?|agents?)\\b",
+        "(^|[.!?]\\s*)(assistant|agent)\\s*:",
+        "\\bautomated (buyers?|orders?|shoppers?)\\b"
+      ],
+      "visible": "soft",
+      "hidden": "hard"
+    },
+    {
+      "id": "CTX.FALSE_AUTHORITY",
+      "description": "Claims the user already approved something",
+      "patterns": [
+        "\\bpre-?approved\\b",
+        "\\b(user|customer) (has )?(already )?approved\\b",
+        "\\bapproved it earlier\\b",
+        "\\bthe user (insists|actually wants|wants)\\b"
+      ],
+      "visible": "soft",
+      "hidden": "hard"
+    },
+    {
+      "id": "CTX.FAKE_COMPLIANCE",
+      "description": "Fake legal, compliance or urgency notice",
+      "patterns": [
+        "\\bmandatory\\b",
+        "\\brequired by (law|regulation)\\b",
+        "\\bregulatory requirement\\b",
+        "\\bcompliance (notice|fee)\\b",
+        "\\bmust (include|be added|add)\\b",
+        "\\bwill be (cancell?ed|suspended)\\b",
+        "\\b(is|are) (mandatory|required) for\\b",
+        "\\brequired (project )?expense\\b",
+        "\\ball (purchases|orders) (must )?include\\b"
+      ],
+      "visible": "soft",
+      "hidden": "hard"
+    },
+    {
+      "id": "CTX.COMMERCE_IMPERATIVE",
+      "description": "Purchase instruction. Normal on a visible page, an attack when hidden",
+      "patterns": [
+        "\\badd (it|this|them)?\\s*to (the )?cart\\b",
+        "\\b(buy|purchase|order|choose|pick|switch to|select)\\b"
+      ],
+      "visible": "none",
+      "hidden": "hard"
+    }
+  ],
+  "output_rules": [
+    { "id": "OUT.SECRET.MWF_KEY", "pattern": "mwf_sk_[A-Za-z0-9_-]{16,}", "decision": "BLOCK" },
+    { "id": "OUT.SECRET.PRIVATE_KEY", "pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----", "decision": "BLOCK" },
+    { "id": "OUT.SECRET.AWS_KEY", "pattern": "\\bAKIA[0-9A-Z]{16}\\b", "decision": "BLOCK" },
+    { "id": "OUT.SECRET.BEARER", "pattern": "\\bBearer\\s+[A-Za-z0-9._~+/-]{24,}", "decision": "BLOCK" },
+    { "id": "OUT.SECRET.API_KEY", "pattern": "\\bsk-[A-Za-z0-9_-]{20,}", "decision": "BLOCK" },
+    { "id": "OUT.EXFIL.MARKDOWN_IMAGE", "pattern": "!\\[[^\\]]*\\]\\(\\s*https?://[^)\\s]*\\?[^)\\s]{16,}\\)", "decision": "REVIEW" }
+  ]
+}

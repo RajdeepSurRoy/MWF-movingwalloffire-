@@ -3,3 +3,8 @@ export * from "./schemas.js";
 export * from "./canonical.js";
 export * from "./ledger.js";
 export * from "./engine.js";
+export * from "./rules.js";
+export * from "./scan.js";
+export * from "./merchant.js";
+export * from "./money.js";
+export * from "./html.js";

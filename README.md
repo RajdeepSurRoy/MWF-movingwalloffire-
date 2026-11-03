@@ -2,7 +2,7 @@
 
 **An adaptive payment firewall for AI shopping agents, built on PayPal.**
 
-> Status: **planning / pre-build.** Nothing is implemented yet. This README describes what we are building for the PayPal hackathon (submission deadline **November 15, 2026**). Sections marked *(planned)* are design intent, not working features. The full security design — including how MWF grows beyond payments to all agentic workflows — is in [docs/architecture.md](docs/architecture.md).
+> Status: **in build.** The deterministic firewall (milestone M2) works: it blocks every obvious attack in our 110-case test battery with no false blocks. This README describes what we are building for the PayPal hackathon (submission deadline **November 15, 2026**). Sections marked *(planned)* are design intent, not working features. The full security design — including how MWF grows beyond payments to all agentic workflows — is in [docs/architecture.md](docs/architecture.md).
 
 ---
 
@@ -175,8 +175,8 @@ Requires Node 24+.
 2. Copy `.env.example` to `.env` and fill in your own PayPal **Sandbox** credentials ([PayPal Developer](https://developer.paypal.com)).
 3. `npm run typecheck` and `npm test`
 4. `npm run harness` runs the test battery (110 ground-truth cases) and prints the attack success rate and false-positive rate.
-5. `npm run keys:create -- <your-name>` prints your own local API key once (only its hash is stored). Put it in `.env` as `MWF_API_KEY`.
-6. `npm run dev:api` starts the firewall API on http://127.0.0.1:8787. `/healthz` is open; every `/v1/*` endpoint needs `Authorization: Bearer <key>`. Until the rules land (M2) every checkpoint fails closed to REVIEW.
+5. `npm run keys:create -- <your-name>` prints your own local API key once (only its hash is stored). Put it in `.env` as `MWF_API_KEY`. Then register the merchants your agent may pay: `npm run merchants:add -- <your-name> shop-a "Shop A" payments@shop-a.example`.
+6. `npm run dev:api` starts the firewall API on http://127.0.0.1:8787. `/healthz` is open; every `/v1/*` endpoint needs `Authorization: Bearer <key>`. Rules live in [packages/core/rules/bundle.json](packages/core/rules/bundle.json) (versioned; every decision logs the version). Only `/v1/actions/check` can ALLOW, and only an ALLOW returns a single-use action token for `/v1/actions/commit`.
 7. `npm run ledger:verify` walks the hash-chained decision ledger.
 
 Repo layout: `packages/` (core, sdk), `apps/` (firewall-api, shop, agent, console), `services/sensors`, `redteam/`, `tests/fixtures/`, `spikes/`. The build order is in [docs/implementation-plan.md](docs/implementation-plan.md).

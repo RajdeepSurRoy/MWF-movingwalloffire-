@@ -1,8 +1,12 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type DecisionResult, type TestCase, TestCase as TestCaseSchema, checkAction, checkCommit, hashCanonical } from "@mwf/core";
+import { type DecisionResult, type MerchantRecord, type TestCase, TestCase as TestCaseSchema, checkAction, checkCommit, hashCanonical } from "@mwf/core";
 
 export const FIXTURES_DIR = join(import.meta.dirname, "..", "fixtures");
+
+export function loadMerchants(dir = FIXTURES_DIR): MerchantRecord[] {
+  return JSON.parse(readFileSync(join(dir, "merchants.json"), "utf8")) as MerchantRecord[];
+}
 
 export function loadCases(dir = FIXTURES_DIR): TestCase[] {
   const cases: TestCase[] = [];
@@ -30,9 +34,9 @@ export interface CaseResult {
 
 // Runs one case through the decision logic only: no network, no PayPal.
 // The check runs first; only an ALLOW goes on to commit, as in production.
-export function runCase(c: TestCase): CaseResult {
+export function runCase(c: TestCase, merchants: MerchantRecord[] = loadMerchants()): CaseResult {
   const base = { id: c.id, category: c.category, expected: c.expected.decision };
-  const check = checkAction({ mandate: c.mandate, context: c.context, action: c.action, now: new Date(c.now) });
+  const check = checkAction({ mandate: c.mandate, context: c.context, action: c.action, now: new Date(c.now), merchants });
   if (check.decision !== "ALLOW") return { ...base, actual: check.decision, decidedAt: "action", reasons: check.reasons };
 
   const approvedActionHash = hashCanonical(c.action);

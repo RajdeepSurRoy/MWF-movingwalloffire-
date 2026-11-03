@@ -71,6 +71,8 @@ export type ProposedAction = z.infer<typeof ProposedAction>;
 export const Reason = z.strictObject({
   rule_id: z.string(),
   message: z.string(),
+  // What the reason is about: a context item id, a SKU or a merchant id.
+  ref: z.string().optional(),
 });
 export type Reason = z.infer<typeof Reason>;
 

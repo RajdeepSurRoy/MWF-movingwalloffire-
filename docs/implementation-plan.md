@@ -64,7 +64,7 @@
 6. **Seed fixtures:** ~10 attacks per category (six categories) and the first 50 legitimate purchases, each with an expected outcome.
    - *Done when:* the harness runs in CI and reports (everything fails — that's expected now).
 
-## M2 — Deterministic firewall (Nov 4–6)
+## M2 — Deterministic firewall (Nov 4–6) — done 2026-11-03
 
 1. **Mandate checks:** category, `max_total`, per-item cap, expiry, allowed actions.
 2. **Merchant and payee allowlist,** exact match after normalization; **lookalike detection** (Unicode confusables, edit distance to allowlisted names).

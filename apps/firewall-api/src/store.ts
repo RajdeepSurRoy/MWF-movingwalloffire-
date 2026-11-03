@@ -2,6 +2,12 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+// Databases created before a column existed get it added on open.
+function addColumnIfMissing(db: DatabaseSync, table: string, column: string, definition: string) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
 // One SQLite file per firewall instance. ":memory:" is used by tests.
 export function openDatabase(path: string): DatabaseSync {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
@@ -18,6 +24,15 @@ export function openDatabase(path: string): DatabaseSync {
       label       TEXT NOT NULL,
       created_at  TEXT NOT NULL,
       revoked_at  TEXT
+    );
+
+    -- The business's merchant registry: which payees each merchant id may be paid at.
+    CREATE TABLE IF NOT EXISTS merchants (
+      tenant_id    TEXT NOT NULL,
+      merchant_id  TEXT NOT NULL,
+      name         TEXT NOT NULL,
+      payee_emails TEXT NOT NULL,
+      PRIMARY KEY (tenant_id, merchant_id)
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
@@ -41,7 +56,7 @@ export function openDatabase(path: string): DatabaseSync {
       PRIMARY KEY (session_id, item_id)
     );
 
-    -- Issued only on ALLOW (M2); bound to the hash of the exact approved action.
+    -- Issued only on ALLOW; bound to the hash of the exact approved action; single use.
     CREATE TABLE IF NOT EXISTS action_tokens (
       token_hash   TEXT PRIMARY KEY,
       session_id   TEXT NOT NULL REFERENCES sessions (id),
@@ -49,6 +64,28 @@ export function openDatabase(path: string): DatabaseSync {
       created_at   TEXT NOT NULL,
       committed_at TEXT
     );
+
+    -- Index of ledger decisions, so feedback can be checked against the caller's tenant.
+    CREATE TABLE IF NOT EXISTS decisions (
+      id         TEXT PRIMARY KEY,
+      tenant_id  TEXT NOT NULL,
+      session_id TEXT,
+      checkpoint TEXT NOT NULL,
+      decision   TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
+  addColumnIfMissing(db, "sessions", "canary", "TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(db, "sessions", "risk_score", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "context_items", "quarantined", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "action_tokens", "expires_at", "TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(db, "action_tokens", "idempotency_key", "TEXT NOT NULL DEFAULT ''");
   return db;
+}
+
+export function upsertMerchant(db: DatabaseSync, tenantId: string, merchant: { id: string; name: string; payee_emails: string[] }) {
+  db.prepare(
+    "INSERT INTO merchants (tenant_id, merchant_id, name, payee_emails) VALUES (?, ?, ?, ?) " +
+      "ON CONFLICT (tenant_id, merchant_id) DO UPDATE SET name = excluded.name, payee_emails = excluded.payee_emails",
+  ).run(tenantId, merchant.id, merchant.name, JSON.stringify(merchant.payee_emails));
 }

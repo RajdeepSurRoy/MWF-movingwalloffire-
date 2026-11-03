@@ -16,7 +16,8 @@
     "dev:api": "npm run dev -w @mwf/firewall-api",
     "keys:create": "npm run cli -w @mwf/firewall-api -- keys:create",
     "ledger:verify": "npm run cli -w @mwf/firewall-api -- ledger:verify",
-    "harness": "npm run harness -w @mwf/tests"
+    "harness": "npm run harness -w @mwf/tests",
+    "merchants:add": "npm run cli -w @mwf/firewall-api -- merchants:add"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
