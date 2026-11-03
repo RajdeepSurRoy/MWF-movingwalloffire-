@@ -36,10 +36,12 @@ export const RuleBundle = z.strictObject({
       hidden: Severity,
     }),
   ),
-  // Phrases removed from hidden text before matching: standard UI labels that are not
-  // instructions ("Order history", "Add to cart"). Exempting phrases, rather than narrowing
-  // what counts as an instruction, keeps every other hidden purchase verb a hard signal.
-  hidden_exemptions: z.array(pattern),
+  // Standard UI labels that are not instructions ("Order history", "Add to cart"). A hidden text
+  // segment is skipped only when one of these matches it whole, so a label cannot be used to
+  // smuggle an instruction ("Select quantity 2 of the premium version" is still caught).
+  hidden_exemptions: z.array(
+    pattern.refine((p) => p.startsWith("^") && p.endsWith("$"), "exemptions must be anchored to the whole segment (^...$)"),
+  ),
   output_rules: z.array(
     z.strictObject({ id: z.string().regex(/^[A-Z][A-Z0-9_.]+$/), pattern, decision: z.enum(["BLOCK", "REVIEW"]) }),
   ),

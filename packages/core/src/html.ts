@@ -1,6 +1,11 @@
 import { Parser } from "htmlparser2";
 
-export type Channel = "visible" | "hidden" | "comment" | "meta";
+// "conditional": hidden by a class or stylesheet rule on an element with responsive classes
+// (shown at some screen sizes). Its hard signals are downgraded to soft: REVIEW, never ALLOW.
+export type Channel = "visible" | "hidden" | "conditional" | "comment" | "meta";
+
+// Tailwind (`md:block`, `lg:hidden`) and Bootstrap (`d-md-block`) responsive display classes.
+const RESPONSIVE_CLASS = /^(sm|md|lg|xl|2xl|max-\w+):|^d-(sm|md|lg|xl|xxl)-\w+$/;
 
 export interface Segment {
   channel: Channel;
@@ -72,6 +77,7 @@ interface AttrTest {
   name: string;
   op: "" | "=" | "~=" | "|=" | "^=" | "$=" | "*=";
   value: string;
+  caseInsensitive: boolean;
 }
 
 interface Compound {
@@ -90,14 +96,36 @@ export interface HidingRule {
 
 // Linear-time split of CSS into (selector, declarations) pairs, innermost blocks only, so rules
 // inside @media / @supports are seen. No backtracking regex runs over attacker-sized input.
-export function cssBlocks(css: string): { selector: string; body: string }[] {
-  const out: { selector: string; body: string }[] = [];
+// Strings ('…', "…") and backslash escapes are skipped, as a browser does, so a brace inside
+// `content: "}"` cannot shift block boundaries. CSS a browser would also struggle with
+// (unbalanced braces, an unclosed string or comment) is reported as malformed rather than
+// guessed at: the caller then treats the page as unanalysable.
+export function cssBlocks(css: string): { blocks: { selector: string; body: string }[]; malformed: boolean } {
+  const blocks: { selector: string; body: string }[] = [];
   let start = 0; // where the current selector text begins
-  let open = -1; // the "{" of the block being read, or -1
+  let open = -1; // the "{" of the innermost block being read, or -1
+  let depth = 0;
+  let malformed = false;
   for (let i = 0; i < css.length; i++) {
     const ch = css.charCodeAt(i);
+    if (ch === 92 /* \ */) {
+      i++; // escaped character: never structural
+      continue;
+    }
+    if (ch === 34 /* " */ || ch === 39 /* ' */) {
+      let j = i + 1;
+      while (j < css.length && css.charCodeAt(j) !== ch) {
+        if (css.charCodeAt(j) === 92) j++;
+        else if (css.charCodeAt(j) === 10) break; // strings cannot span lines
+        j++;
+      }
+      if (j >= css.length || css.charCodeAt(j) !== ch) malformed = true;
+      i = j;
+      continue;
+    }
     if (ch === 47 /* / */ && css.charCodeAt(i + 1) === 42 /* * */) {
       const end = css.indexOf("*/", i + 2);
+      if (end < 0) malformed = true;
       i = end < 0 ? css.length : end + 1;
       continue;
     }
@@ -106,32 +134,139 @@ export function cssBlocks(css: string): { selector: string; body: string }[] {
       // selector of the inner block starts right after it.
       if (open >= 0) start = open + 1;
       open = i;
+      depth++;
     } else if (ch === 125 /* } */) {
-      if (open >= 0) out.push({ selector: css.slice(start, open), body: css.slice(open + 1, i) });
+      if (depth === 0) malformed = true;
+      else depth--;
+      if (open >= 0) blocks.push({ selector: css.slice(start, open), body: css.slice(open + 1, i) });
       open = -1;
       start = i + 1;
     } else if (ch === 59 /* ; */ && open < 0) {
       start = i + 1; // end of an @import / @charset statement
     }
   }
-  return out;
+  if (depth !== 0) malformed = true;
+  return { blocks, malformed };
 }
 
-const ATTR = /\[\s*([\w-]+)\s*(?:([~|^$*]?=)\s*(?:"([^"]*)"|'([^']*)'|([^\]\s]*)))?\s*[is]?\s*\]/g;
+const UNIVERSAL: Compound = { ids: [], classes: [], attrs: [], universal: true };
 
-function parseCompound(last: string): Compound {
-  const attrs: AttrTest[] = [...last.matchAll(ATTR)].map((m) => ({
-    name: m[1]!.toLowerCase(),
-    op: (m[2] ?? "") as AttrTest["op"],
-    value: m[3] ?? m[4] ?? m[5] ?? "",
-  }));
-  // Pseudo-classes are dropped, which only widens the match (fail toward hidden).
-  const bare = last.replace(ATTR, "").replace(/:[\w-]+(\([^)]*\))?/g, "");
-  const tag = /^[a-z][a-z0-9-]*/i.exec(bare)?.[0]?.toLowerCase();
-  const ids = [...bare.matchAll(/#([\w-]+)/g)].map((x) => x[1]!);
-  const classes = [...bare.matchAll(/\.([\w-]+)/g)].map((x) => x[1]!.toLowerCase());
-  const universal = !tag && ids.length === 0 && classes.length === 0 && attrs.length === 0;
-  return { ...(tag ? { tag } : {}), ids, classes, attrs, universal };
+// Skips a quoted string starting at s[i]; returns the index after it, or -1 if unclosed.
+function skipString(s: string, i: number): number {
+  const q = s[i];
+  for (let j = i + 1; j < s.length; j++) {
+    if (s[j] === "\\") j++;
+    else if (s[j] === q) return j + 1;
+  }
+  return -1;
+}
+
+// The rightmost compound selector: text after the last combinator at the top level,
+// ignoring anything inside [...], (...), strings and escapes.
+export function lastCompound(selector: string): string {
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < selector.length; i++) {
+    const c = selector[i]!;
+    if (c === "\\") i++;
+    else if (c === '"' || c === "'") {
+      const end = skipString(selector, i);
+      if (end < 0) return selector.slice(start);
+      i = end - 1;
+    } else if (c === "[" || c === "(") depth++;
+    else if (c === "]" || c === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && /[\s>+~]/.test(c)) start = i + 1;
+  }
+  return selector.slice(start).trim();
+}
+
+// Reads a CSS identifier at s[i], decoding escapes (`\31 `, `\:`) as a browser does.
+function readIdent(s: string, i: number): { value: string; end: number } {
+  let value = "";
+  while (i < s.length) {
+    const c = s[i]!;
+    if (c === "\\") {
+      const hex = /^[0-9a-f]{1,6}/i.exec(s.slice(i + 1, i + 7))?.[0];
+      if (hex) {
+        value += String.fromCodePoint(Math.min(Number.parseInt(hex, 16) || 0xfffd, 0x10ffff));
+        i += 1 + hex.length;
+        if (s[i] === " " || s[i] === "\t" || s[i] === "\n") i++;
+      } else if (i + 1 < s.length) {
+        value += s[i + 1];
+        i += 2;
+      } else break;
+    } else if (/[\w-]/.test(c) || c.charCodeAt(0) >= 0x80) {
+      value += c;
+      i++;
+    } else break;
+  }
+  return { value, end: i };
+}
+
+const ATTR_BODY = /^\s*([\w-]+)\s*(?:([~|^$*]?=)\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^\s"'\]]*)))?\s*([is])?\s*$/i;
+
+// Parses one compound selector (e.g. `div.promo#x[data-a="b" i]:hover`). Pseudo-classes are
+// ignored, which only widens the match. Returns null for a pseudo-element (it hides generated
+// content, not element text) and UNIVERSAL for anything not understood with certainty, so
+// unusual syntax makes more text get the strict hidden rules, never less.
+export function parseCompound(s: string): Compound | null {
+  const out: Compound = { ids: [], classes: [], attrs: [], universal: false };
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i]!;
+    if (c === "*") {
+      i++;
+    } else if (c === "#" || c === ".") {
+      const id = readIdent(s, i + 1);
+      if (!id.value) return UNIVERSAL;
+      (c === "#" ? out.ids : out.classes).push(id.value.toLowerCase());
+      i = id.end;
+    } else if (c === "[") {
+      let j = i + 1;
+      while (j < s.length && s[j] !== "]") {
+        if (s[j] === '"' || s[j] === "'") {
+          const end = skipString(s, j);
+          if (end < 0) return UNIVERSAL;
+          j = end;
+        } else j += s[j] === "\\" ? 2 : 1;
+      }
+      const m = ATTR_BODY.exec(s.slice(i + 1, j));
+      if (j >= s.length || !m) return UNIVERSAL;
+      const value = m[3] ?? m[4] ?? m[5] ?? "";
+      if (value.includes("\\")) return UNIVERSAL;
+      // Matched case-insensitively even without the `i` flag: only widens the match.
+      out.attrs.push({ name: m[1]!.toLowerCase(), op: (m[2] ?? "") as AttrTest["op"], value, caseInsensitive: true });
+      i = j + 1;
+    } else if (c === ":") {
+      if (s[i + 1] === ":") return null;
+      const name = readIdent(s, i + 1);
+      if (!name.value) return UNIVERSAL;
+      i = name.end;
+      if (s[i] === "(") {
+        // Skip the argument, balanced and string-aware.
+        let depth = 0;
+        for (; i < s.length; i++) {
+          if (s[i] === "\\") i++;
+          else if (s[i] === '"' || s[i] === "'") {
+            const end = skipString(s, i);
+            if (end < 0) return UNIVERSAL;
+            i = end - 1;
+          } else if (s[i] === "(") depth++;
+          else if (s[i] === ")" && --depth === 0) break;
+        }
+        if (depth !== 0) return UNIVERSAL;
+        i++;
+      }
+    } else if (i === 0 && (/[a-z]/i.test(c) || c === "\\")) {
+      const tag = readIdent(s, i);
+      out.tag = tag.value.toLowerCase();
+      i = tag.end;
+    } else {
+      return UNIVERSAL;
+    }
+  }
+  out.universal = !out.tag && out.ids.length === 0 && out.classes.length === 0 && out.attrs.length === 0;
+  return out;
 }
 
 // Selectors whose rules hide text, from <style> blocks. Only the rightmost compound of each
@@ -140,24 +275,27 @@ function parseCompound(last: string): Compound {
 export function hidingSelectors(css: string): { rules: HidingRule[]; overflow: boolean } {
   const rules: HidingRule[] = [];
   if (css.length > MAX_CSS_CHARS) return { rules, overflow: true };
-  for (const { selector, body } of cssBlocks(css)) {
+  const { blocks, malformed } = cssBlocks(css);
+  for (const { selector, body } of blocks) {
     if (!hiddenByStyle(body)) continue;
     for (const raw of selector.split(",")) {
       const source = raw.trim();
       if (!source || source.startsWith("@")) continue;
-      const last = source.split(/[\s>+~]+/).pop() ?? "";
-      // Pseudo-elements (::before, ::-webkit-scrollbar) hide generated boxes, not element text.
-      if (!last || last.includes("::")) continue;
-      rules.push({ compound: parseCompound(last), source });
+      // null = pseudo-element (::before, ::-webkit-scrollbar): hides generated boxes, not text.
+      const compound = parseCompound(lastCompound(source));
+      if (!compound) continue;
+      rules.push({ compound, source });
       if (rules.length > MAX_HIDING_SELECTORS) return { rules, overflow: true };
     }
   }
-  return { rules, overflow: false };
+  return { rules, overflow: malformed };
 }
 
 function attrMatches(t: AttrTest, attrs: Record<string, string>): boolean {
-  const v = attrs[t.name];
-  if (v === undefined) return false;
+  const raw = attrs[t.name];
+  if (raw === undefined) return false;
+  const v = t.caseInsensitive ? raw.toLowerCase() : raw;
+  t = t.caseInsensitive ? { ...t, value: t.value.toLowerCase() } : t;
   switch (t.op) {
     case "":
       return true;
@@ -268,37 +406,52 @@ export function extractSegments(html: string): ExtractedPage {
   const index = new SelectorIndex(rules);
 
   const segments: Segment[] = [];
-  const stack: { name: string; hidden: string; skip: boolean }[] = [];
+  // `conditional`: hidden only through classes or stylesheet rules on an element that also has
+  // responsive classes, i.e. probably visible to some visitors (Tailwind `hidden md:block`).
+  const stack: { name: string; hidden: string; conditional: boolean; skip: boolean }[] = [];
   const top = () => stack[stack.length - 1];
+  const seg = (el: { hidden: string; conditional: boolean } | undefined, text: string): Segment =>
+    !el?.hidden
+      ? { channel: "visible", text, how: "" }
+      : { channel: el.conditional ? "conditional" : "hidden", text, how: el.hidden };
 
   const parser = new Parser(
     {
       onopentag(name, attrs) {
         const parent = top();
         const classes = (attrs.class ?? "").toLowerCase().split(/\s+/).filter(Boolean);
-        const ids = attrs.id ? [attrs.id] : [];
-        const viaSheet = parent?.hidden ? undefined : index.find(name, ids, classes, attrs);
-        const viaClass = classes.find((c) => HIDING_CLASSES.has(c));
-        const hidden =
-          parent?.hidden ||
+        const ids = attrs.id ? [attrs.id.toLowerCase()] : [];
+        // Hiding that holds for every visitor: inherited for certain, inline, attribute, element.
+        const certain =
+          (parent?.hidden && !parent.conditional ? parent.hidden : "") ||
           hiddenByStyle(attrs.style) ||
           ("hidden" in attrs ? "hidden attribute" : "") ||
           (HIDDEN_ELEMENTS.has(name) ? `<${name}>` : "") ||
-          (viaSheet ? `stylesheet rule ${viaSheet.source}` : "") ||
-          (viaClass ? `hiding class .${viaClass}` : "") ||
           (name === "input" && attrs.type?.toLowerCase() === "hidden" ? "hidden input" : "");
-        stack.push({ name, hidden, skip: (parent?.skip ?? false) || SKIP.has(name) });
+        let hidden = certain;
+        let conditional = false;
+        if (!hidden) {
+          const viaSheet = index.find(name, ids, classes, attrs);
+          const viaClass = classes.find((c) => HIDING_CLASSES.has(c));
+          hidden =
+            (viaSheet ? `stylesheet rule ${viaSheet.source}` : "") ||
+            (viaClass ? `hiding class .${viaClass}` : "") ||
+            (parent?.hidden ?? "");
+          conditional = hidden !== "" && (classes.some((c) => RESPONSIVE_CLASS.test(c)) || (!viaSheet && !viaClass && !!parent?.conditional));
+        }
+        stack.push({ name, hidden, conditional, skip: (parent?.skip ?? false) || SKIP.has(name) });
+        const el = top();
         if (name === "meta" && attrs.content) segments.push({ channel: "meta", text: attrs.content, how: "meta tag" });
-        if (name === "input" && attrs.value && hidden) segments.push({ channel: "hidden", text: attrs.value, how: hidden });
+        if (name === "input" && attrs.value && hidden) segments.push(seg(el, attrs.value));
         for (const a of VISIBLE_ATTRS) {
           const v = attrs[a];
-          if (v) segments.push(hidden ? { channel: "hidden", text: v, how: hidden } : { channel: "visible", text: v, how: "" });
+          if (v) segments.push(seg(el, v));
         }
       },
       ontext(text) {
         const el = top();
         if (el?.skip || !text.trim()) return;
-        segments.push(el?.hidden ? { channel: "hidden", text, how: el.hidden } : { channel: "visible", text, how: "" });
+        segments.push(seg(el, text));
       },
       oncomment(text) {
         if (text.trim()) segments.push({ channel: "comment", text, how: "HTML comment" });

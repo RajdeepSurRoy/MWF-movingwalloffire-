@@ -29,7 +29,12 @@ function matchRules(bundle: RuleBundle, raw: string, channel: Channel | "text", 
   const clean = normalize(raw, true);
   const unstripped = normalize(raw, false);
   for (const rule of bundle.text_rules) {
-    const severity = channel === "visible" || channel === "text" ? rule.visible : rule.hidden;
+    const severity =
+      channel === "visible" || channel === "text"
+        ? rule.visible
+        : channel === "conditional" && rule.hidden === "hard"
+          ? "soft"
+          : rule.hidden;
     for (const p of rule.patterns) {
       const re = regex(bundle, p, "imu");
       const m = re.exec(clean);
@@ -45,10 +50,10 @@ function matchRules(bundle: RuleBundle, raw: string, channel: Channel | "text", 
   return findings;
 }
 
+// A whole segment that is just a standard UI label becomes empty; anything else is kept as is.
 function stripExemptions(text: string, bundle: RuleBundle): string {
-  let t = normalize(text, true);
-  for (const p of bundle.hidden_exemptions) t = t.replace(regex(bundle, p, "giu"), " ");
-  return t;
+  const t = normalize(text, true);
+  return bundle.hidden_exemptions.some((p) => regex(bundle, p, "iu").test(t)) ? "" : text;
 }
 
 // Scans one context item for injection artifacts. Pure and deterministic.
