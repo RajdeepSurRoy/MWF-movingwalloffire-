@@ -101,6 +101,8 @@
 ## M5 — Shopping agent and SDK wrapper (Nov 6–8)
 
 1. **SDK (`packages/sdk`):** `startSession(intent)`, `inspectContext(items)`, `checkAction(action)`, `commitAction(token)`. It wraps the agent's tool calls so the agent never talks to PayPal directly.
+   - **Trust tags and inspection are set by the SDK, not the agent.** The SDK wraps the fetch / browse tools, sends every result to `/v1/context/inspect` itself, and tags it `untrusted` unless it came from the business's own systems. Today the caller chooses `trust`, so a compromised agent could mark a malicious page `trusted` (unscanned) or skip inspection; found in the M2 security review (2026-11-03).
+   - **Known gap:** hiding done in *external* stylesheets is only caught via common hiding class names (`.sr-only`, `.d-none`, ...). A headless-render visibility check closes it (Phase 1).
 2. **Agent:** reads shop pages, chooses items, calls one `propose_purchase` tool. Runs through the SDK.
 3. **Record/replay** of agent runs so end-to-end tests are repeatable without calling the model each time.
 4. **Baseline mode:** the same agent with the firewall switched off, for the "with vs. without" demo step.

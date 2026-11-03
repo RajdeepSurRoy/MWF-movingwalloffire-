@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Phase 0 deterministic rules. Every change bumps the version; every decision logs it.",
   "risk": {
     "weights": { "info": 5, "soft": 15, "hard": 40 },
@@ -72,7 +72,7 @@
       "description": "Purchase instruction. Normal on a visible page, an attack when hidden",
       "patterns": [
         "\\badd (it|this|them)?\\s*to (the )?cart\\b",
-        "\\b(buy|purchase|order|choose|pick|switch to|select)\\b"
+        "\\b(buy|purchase|order|choose|pick|switch to|select)\\s+(the|this|that|it|them|a|an|\\d+|quantity|sku|item|premium|gift)\\b"
       ],
       "visible": "none",
       "hidden": "hard"

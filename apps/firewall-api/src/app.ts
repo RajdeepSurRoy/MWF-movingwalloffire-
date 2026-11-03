@@ -102,9 +102,17 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     return { mandate: Mandate.parse(JSON.parse(row.mandate)), canaries: row.canary ? [row.canary] : [], risk: row.risk_score };
   }
 
-  function loadContext(sessionId: string): ContextItem[] {
-    const rows = db.prepare("SELECT item FROM context_items WHERE session_id = ? ORDER BY created_at, item_id").all(sessionId) as { item: string }[];
-    return rows.map((r) => ContextItem.parse(JSON.parse(r.item)));
+  // Every version of every item the session has seen, plus the ids ever quarantined.
+  function loadContext(sessionId: string): { items: ContextItem[]; quarantined: string[] } {
+    const rows = db.prepare("SELECT item, item_id, quarantined FROM context_log WHERE session_id = ? ORDER BY seq").all(sessionId) as {
+      item: string;
+      item_id: string;
+      quarantined: number;
+    }[];
+    return {
+      items: rows.map((r) => ContextItem.parse(JSON.parse(r.item))),
+      quarantined: [...new Set(rows.filter((r) => r.quarantined).map((r) => r.item_id))],
+    };
   }
 
   function loadMerchants(tenantId: string): MerchantRecord[] {
@@ -185,11 +193,11 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     const result = checkContext(body.items, bundle);
     const quarantined = new Set(result.quarantined);
     const insert = db.prepare(
-      "INSERT OR REPLACE INTO context_items (session_id, item_id, trust, content_hash, item, created_at, quarantined) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO context_log (session_id, item_id, trust, content_hash, item, quarantined, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     );
     const now = new Date().toISOString();
     for (const item of body.items) {
-      insert.run(body.session_id, item.id, item.trust, hashCanonical(item.content), JSON.stringify(item), now, quarantined.has(item.id) ? 1 : 0);
+      insert.run(body.session_id, item.id, item.trust, hashCanonical(item), JSON.stringify(item), quarantined.has(item.id) ? 1 : 0, now);
     }
     const rec = record(tenantId, "context", body.session_id, result);
     return { ...respond(rec), items: body.items.map((i) => ({ id: i.id, quarantined: quarantined.has(i.id) })) };
@@ -201,10 +209,12 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     const body = CheckActionBody.parse(req.body);
     const session = loadSession(tenantId, body.session_id);
     const actionHash = hashCanonical(body.action);
+    const context = loadContext(body.session_id);
     const result = checkAction(
       {
         mandate: session.mandate,
-        context: loadContext(body.session_id),
+        context: context.items,
+        quarantined: context.quarantined,
         action: body.action,
         now: new Date(),
         merchants: loadMerchants(tenantId),

@@ -56,6 +56,23 @@ export function openDatabase(path: string): DatabaseSync {
       PRIMARY KEY (session_id, item_id)
     );
 
+    -- Append-only: re-sending an item id with new content adds a version, never replaces one,
+    -- so an attacker cannot wash a quarantined page by re-inspecting it with clean content.
+    -- (Replaces the M1 context_items table, which is no longer read.)
+    CREATE TABLE IF NOT EXISTS context_log (
+      seq          INTEGER PRIMARY KEY,
+      session_id   TEXT    NOT NULL REFERENCES sessions (id),
+      item_id      TEXT    NOT NULL,
+      trust        TEXT    NOT NULL,
+      content_hash TEXT    NOT NULL,
+      item         TEXT    NOT NULL,
+      quarantined  INTEGER NOT NULL,
+      created_at   TEXT    NOT NULL,
+      UNIQUE (session_id, item_id, content_hash)
+    );
+    CREATE TRIGGER IF NOT EXISTS context_log_no_update BEFORE UPDATE ON context_log
+      BEGIN SELECT RAISE(ABORT, 'context_log is append-only'); END;
+
     -- Issued only on ALLOW; bound to the hash of the exact approved action; single use.
     CREATE TABLE IF NOT EXISTS action_tokens (
       token_hash   TEXT PRIMARY KEY,

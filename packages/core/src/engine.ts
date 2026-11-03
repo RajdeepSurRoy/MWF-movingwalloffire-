@@ -81,6 +81,8 @@ export interface ActionCheckInput {
   canaries?: string[];
   // Risk carried over from earlier decisions in the session.
   priorRisk?: number;
+  // Context item ids quarantined at checkpoint 2. Sticky: a later rule bundle cannot un-quarantine them.
+  quarantined?: string[];
 }
 
 function checkPayment(input: ActionCheckInput, bundle: RuleBundle, block: Reason[], review: Reason[]) {
@@ -165,6 +167,11 @@ export function checkAction(input: ActionCheckInput, bundle = getDefaultBundle()
   for (const f of findings) {
     if (f.severity === "hard") (onPath.has(f.item_id) ? block : review).push(findingReason(f));
     else if (f.severity === "soft") review.push(findingReason(f));
+  }
+
+  for (const id of input.quarantined ?? []) {
+    if (onPath.has(id)) block.push(reason("CTX.QUARANTINED_SOURCE", "The action relies on content quarantined at the context scan", id));
+    else review.push(reason("CTX.QUARANTINED_IN_SESSION", "The session contains quarantined content", id));
   }
 
   const risk = findingRisk(findings, bundle);

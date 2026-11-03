@@ -134,6 +134,16 @@ describe("firewall API", () => {
       expect(check.json().action_token).toBeNull();
     });
 
+    it("cannot wash a quarantined page by re-sending it with clean content", async () => {
+      const { id } = await newSession();
+      await post("/v1/context/inspect", { session_id: id, items: [hiddenPage] });
+      const again = await post("/v1/context/inspect", { session_id: id, items: [cleanPage] });
+      expect(again.json().items).toEqual([{ id: "page-1", quarantined: false }]);
+      const check = await post("/v1/actions/check", { session_id: id, action });
+      expect(check.json().decision).toBe("BLOCK");
+      expect(check.json().reasons.map((r: { rule_id: string }) => r.rule_id)).toContain("CTX.QUARANTINED_SOURCE");
+    });
+
     it("blocks an over-budget action", async () => {
       const id = await sessionWith(cleanPage);
       expect((await post("/v1/actions/check", { session_id: id, action: overBudget })).json().decision).toBe("BLOCK");
