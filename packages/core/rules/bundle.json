@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Phase 0 deterministic rules. Every change bumps the version; every decision logs it.",
   "risk": {
     "weights": { "info": 5, "soft": 15, "hard": 40 },
@@ -72,11 +72,20 @@
       "description": "Purchase instruction. Normal on a visible page, an attack when hidden",
       "patterns": [
         "\\badd (it|this|them)?\\s*to (the )?cart\\b",
-        "\\b(buy|purchase|order|choose|pick|switch to|select)\\s+(the|this|that|it|them|a|an|\\d+|quantity|sku|item|premium|gift)\\b"
+        "\\b(buy|purchase|order|choose|pick|switch to|select|upgrade)\\b"
       ],
       "visible": "none",
       "hidden": "hard"
     }
+  ],
+  "hidden_exemptions": [
+    "\\border (history|status|tracking|details|summary|lookup)\\b",
+    "\\btrack (your |my )?orders?\\b",
+    "\\bmy orders\\b",
+    "\\bselect (a |an |your )?(language|country|region|currency|size|colou?r|quantity|option|store|location|variant)\\b",
+    "\\bpick ?up( in store)?\\b",
+    "\\b(buy it again|buy again)\\b",
+    "^\\s*(add to (cart|bag|basket)|buy now|buy it now|order now|shop now|quick buy)\\s*$"
   ],
   "output_rules": [
     { "id": "OUT.SECRET.MWF_KEY", "pattern": "mwf_sk_[A-Za-z0-9_-]{16,}", "decision": "BLOCK" },

@@ -45,6 +45,12 @@ function matchRules(bundle: RuleBundle, raw: string, channel: Channel | "text", 
   return findings;
 }
 
+function stripExemptions(text: string, bundle: RuleBundle): string {
+  let t = normalize(text, true);
+  for (const p of bundle.hidden_exemptions) t = t.replace(regex(bundle, p, "giu"), " ");
+  return t;
+}
+
 // Scans one context item for injection artifacts. Pure and deterministic.
 export function scanContextItem(item: ContextItem, bundle: RuleBundle): Finding[] {
   if (item.trust === "trusted") return [];
@@ -62,9 +68,20 @@ export function scanContextItem(item: ContextItem, bundle: RuleBundle): Finding[
     return findings;
   }
 
-  const segments = extractSegments(item.content);
+  const { segments, styleOverflow } = extractSegments(item.content);
+  if (styleOverflow) {
+    // Too much CSS to analyse within limits: visibility is unknown, so do not let it pass clean.
+    push({ rule_id: "CTX.STYLE_UNANALYSABLE", severity: "soft", item_id: item.id, channel: "hidden", excerpt: "page CSS exceeds analysis limits" });
+  }
   const byChannel = new Map<Channel, string[]>();
-  for (const s of segments) byChannel.set(s.channel, [...(byChannel.get(s.channel) ?? []), s.text]);
+  for (const s of segments) {
+    // Standard UI labels ("Order history", "Add to cart") are removed from non-visible text
+    // before matching, so hidden menus and hover buttons don't trip the broad purchase rule.
+    const text = s.channel === "visible" ? s.text : stripExemptions(s.text, bundle);
+    const list = byChannel.get(s.channel);
+    if (list) list.push(text);
+    else byChannel.set(s.channel, [text]);
+  }
 
   const hidden = segments.filter((s) => s.channel === "hidden");
   if (hidden.length > 0) {
