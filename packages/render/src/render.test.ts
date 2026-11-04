@@ -17,7 +17,7 @@ const page = (css: string, body: string) =>
 
 describe.skipIf(!available)("PageRenderer", () => {
   const renderer = new PageRenderer();
-  afterAll(() => renderer.close());
+  afterAll(() => renderer.close(), 30_000); // slow while other test files render
 
   const hiddenOf = async (html: string) => {
     const r = await renderer.render(html);

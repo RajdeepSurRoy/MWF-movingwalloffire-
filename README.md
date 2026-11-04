@@ -181,7 +181,17 @@ Requires Node 24+.
 
 Page rendering: `/v1/context/inspect` renders each untrusted HTML page in headless Chromium at a desktop and a phone size, with the page's scripts off and every network request refused. Text the browser paints invisibly (transparent, off the page, colour equal to background, tiny, clipped away) is treated as hidden; hiding real UIs also use (display:none, a collapsed container, one screen size only) gets REVIEW. Rendering only adds findings, never clears one, and a page that cannot be rendered gets REVIEW. Set `MWF_RENDER=off` to use the static check only.
 
-Linked stylesheets: send the CSS the agent's browser loaded for a page as `resources` on the context item (`[{ "url", "content_type": "text/css", "content" }]`, with `source.uri` set to the page URL). The firewall applies it without fetching anything itself. A page that links a stylesheet you did not send gets REVIEW (`CTX.STYLES_NOT_PROVIDED`), since hiding could live there.
+Linked stylesheets: send the CSS the agent's browser loaded for a page as `resources` on the context item (`[{ "url", "content_type": "text/css", "content" }]`, with `source.uri` set to the page URL). The firewall applies it without fetching anything itself. A page that links a stylesheet you did not send gets REVIEW (`CTX.STYLES_NOT_PROVIDED`), since hiding could live there. A stylesheet that redirected is sent as `{ "url": <linked URL>, "content": "", "redirect_to": <next URL> }` plus the final sheet under its own URL.
+
+With Playwright, `@mwf/sdk` builds the item for you:
+
+```ts
+import { pageContextItem, recordStylesheets } from "@mwf/sdk";
+const recorder = recordStylesheets(page); // before page.goto
+await page.goto(url);
+const item = await pageContextItem(page, recorder, { id: "page-1" });
+recorder.stop();
+```
 
 Repo layout: `packages/` (core, sdk), `apps/` (firewall-api, shop, agent, console), `services/sensors`, `redteam/`, `tests/fixtures/`, `spikes/`. The build order is in [docs/implementation-plan.md](docs/implementation-plan.md).
 

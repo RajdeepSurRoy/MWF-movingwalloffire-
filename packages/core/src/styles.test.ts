@@ -111,6 +111,15 @@ describe("linked stylesheets", () => {
     expect(rules(r)).toContain("CTX.STYLES_NOT_PROVIDED");
   });
 
+  it("follows a redirected stylesheet, resolving its @import against where it ended up", () => {
+    const html = `<link rel="stylesheet" href="/old.css">${attack}`;
+    const moved = { ...css("https://shop-a.example/old.css", ""), redirect_to: "https://shop-a.example/new/site.css" };
+    const site = css("https://shop-a.example/new/site.css", `@import "promo.css";`);
+    const missing = run(page(html, [moved, site]));
+    expect(missing.reasons.find((x) => x.rule_id === "CTX.STYLES_NOT_PROVIDED")?.message).toContain("https://shop-a.example/new/promo.css");
+    expect(run(page(html, [moved, site, css("https://shop-a.example/new/promo.css", ".promo { display: none }")])).decision).toBe("BLOCK");
+  });
+
   it("does not trust a supplied stylesheet for a different URL", () => {
     const r = run(page(`<link rel="stylesheet" href="/site.css">${attack}`, [css("https://elsewhere.example/site.css", "")]));
     expect(rules(r)).toContain("CTX.STYLES_NOT_PROVIDED");

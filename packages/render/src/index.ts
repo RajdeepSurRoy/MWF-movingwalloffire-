@@ -1,4 +1,4 @@
-import { type ContextItem, PAGE_BASE_FALLBACK, type RenderReport, type RenderedText, resolveUrl } from "@mwf/core";
+import { type ContextItem, PAGE_BASE_FALLBACK, type RenderReport, type RenderedText, rebaseImports, resolveUrl } from "@mwf/core";
 import { type Browser, type BrowserContext, chromium } from "playwright";
 import { type ProbeResult, probe } from "./probe.js";
 
@@ -14,7 +14,7 @@ const PROBE_SOURCE = (maxTexts: number) => `(() => { const __name = (f) => f; re
 // The page's address and the stylesheets the agent's browser loaded for it.
 export interface PageInput {
   url?: string | undefined;
-  stylesheets?: { url: string; content: string }[] | undefined;
+  stylesheets?: { url: string; content: string; redirect_to?: string | undefined }[] | undefined;
 }
 
 export interface Viewport {
@@ -151,11 +151,7 @@ export class PageRenderer {
     // own URL so relative links resolve as they did for the agent, and each stylesheet comes
     // from what the caller supplied.
     const pageUrl = resolveUrl(input.url ?? "", PAGE_BASE_FALLBACK) ?? PAGE_BASE_FALLBACK;
-    const styles = new Map<string, string>();
-    for (const s of input.stylesheets ?? []) {
-      const url = resolveUrl(s.url, s.url);
-      if (url && !styles.has(url)) styles.set(url, s.content);
-    }
+    const styles = stylesheetMap(input.stylesheets ?? []);
     let served = false;
     await context.route("**/*", (route) => {
       const req = route.request();
@@ -196,6 +192,31 @@ export class PageRenderer {
     if (next) next();
     else this.#running--;
   }
+}
+
+// CSS to serve by URL. A redirect's source gets its final sheet, with relative @imports made
+// absolute against the final URL: Playwright does not intercept the request after a fulfilled
+// redirect, so the redirect itself cannot be replayed.
+function stylesheetMap(sheets: NonNullable<PageInput["stylesheets"]>): Map<string, string> {
+  const byUrl = new Map<string, { content: string; redirect: string | undefined }>();
+  for (const s of sheets) {
+    const url = resolveUrl(s.url, s.url);
+    const redirect = s.redirect_to === undefined ? undefined : (resolveUrl(s.redirect_to, s.redirect_to) ?? undefined);
+    if (url && !byUrl.has(url)) byUrl.set(url, { content: s.content, redirect });
+  }
+  const out = new Map<string, string>();
+  for (const [url, sheet] of byUrl) {
+    let final = url;
+    const seen = new Set([url]);
+    for (let next = sheet.redirect; next && !seen.has(next); next = byUrl.get(next)?.redirect) {
+      seen.add(next);
+      final = next;
+    }
+    const target = byUrl.get(final);
+    if (!target || target.redirect) continue; // the chain ends nowhere: leave it unanswered (reported)
+    out.set(url, final === url ? target.content : rebaseImports(target.content, final));
+  }
+  return out;
 }
 
 // Text hidden in every viewport keeps its strength; hidden in only some is conditional,

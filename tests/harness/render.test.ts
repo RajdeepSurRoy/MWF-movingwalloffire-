@@ -13,7 +13,7 @@ if (!available && process.env.MWF_REQUIRE_RENDER === "1") throw new Error("Chrom
 
 describe.skipIf(!available)("battery with page rendering", () => {
   const renderer = new PageRenderer();
-  afterAll(() => renderer.close());
+  afterAll(() => renderer.close(), 30_000); // slow while other test files render
   const merchants = loadMerchants();
   const render = (item: ContextItem) => renderer.renderItem(item);
 

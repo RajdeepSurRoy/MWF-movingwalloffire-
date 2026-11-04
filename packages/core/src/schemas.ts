@@ -40,6 +40,9 @@ export const ContextItem = z.strictObject({
         url: z.url({ protocol: /^https?$/ }).max(2000),
         content_type: z.literal("text/css"),
         content: z.string().max(1_000_000),
+        // The request for `url` was redirected here (content is then empty). Kept so a sheet's
+        // relative @imports resolve against where it really came from, as in the agent's browser.
+        redirect_to: z.url({ protocol: /^https?$/ }).max(2000).optional(),
       }),
     )
     .max(50)

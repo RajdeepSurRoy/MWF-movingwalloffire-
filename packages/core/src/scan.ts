@@ -73,13 +73,21 @@ export function resolveUrl(href: string, base: string): string | null {
   }
 }
 
+// A stylesheet's @import targets made absolute against `base`, for serving it from another URL
+// (a redirect's source). Forms this does not rewrite still resolve against the wrong URL,
+// which the renderer then reports as a stylesheet it was not given: it fails closed.
+export function rebaseImports(css: string, base: string): string {
+  return css.replace(/(@import\s+(?:url\(\s*)?["']?)([^"')\s;]+)/gi, (_m, pre: string, href: string) => pre + (resolveUrl(href, base) ?? href));
+}
+
 // The CSS a page loads, from the stylesheets the caller supplied, and the linked ones (also
 // those @imported by supplied sheets) it did not supply. data: stylesheets carry their own CSS.
 function pageStyles(item: ContextItem): { css: string; missing: string[] } {
-  const supplied = new Map<string, string>();
+  const supplied = new Map<string, { content: string; redirect?: string }>();
   for (const r of item.resources ?? []) {
     const url = resolveUrl(r.url, r.url);
-    if (url && !supplied.has(url)) supplied.set(url, r.content);
+    const redirect = r.redirect_to === undefined ? undefined : (resolveUrl(r.redirect_to, r.redirect_to) ?? undefined);
+    if (url && !supplied.has(url)) supplied.set(url, { content: r.content, ...(redirect && { redirect }) });
   }
   const page = pageStyleRefs(item.content);
   const base = resolveUrl(page.baseHref ?? "", item.source.uri ?? PAGE_BASE_FALLBACK) ?? PAGE_BASE_FALLBACK;
@@ -109,9 +117,10 @@ function pageStyles(item: ContextItem): { css: string; missing: string[] } {
     if (!url) return void missing.push(`stylesheet with an unusable URL: ${href.slice(0, 100)}`);
     if (seen.has(url)) return;
     seen.add(url);
-    const content = supplied.get(url);
-    if (content === undefined) return void missing.push(url);
-    follow(content, url, url);
+    const sheet = supplied.get(url);
+    if (sheet === undefined) return void missing.push(url);
+    if (sheet.redirect) return visit(sheet.redirect, url); // `seen` stops redirect loops
+    follow(sheet.content, url, url);
   };
   unreadable("the page's <style> blocks", page.unparsedImports);
   for (const href of page.stylesheets) visit(href, base);
