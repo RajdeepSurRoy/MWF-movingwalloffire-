@@ -1,5 +1,5 @@
 import { hashCanonical } from "./canonical.js";
-import { type Channel, type Segment, extractSegments } from "./html.js";
+import { type Channel, type Segment, cssImports, extractSegments, pageStyleRefs } from "./html.js";
 import type { RenderReport, RenderReports } from "./rendered.js";
 import { type RuleBundle, type Severity, regex } from "./rules.js";
 import type { ContextItem } from "./schemas.js";
@@ -58,6 +58,63 @@ function stripExemptions(text: string, bundle: RuleBundle): string {
   return bundle.hidden_exemptions.some((p) => regex(bundle, p, "iu").test(t)) ? "" : text;
 }
 
+// Base URL for pages without a usable source.uri; relative links then match no resource.
+export const PAGE_BASE_FALLBACK = "https://page.invalid/";
+
+// An absolute http(s) URL without its #fragment, or null (data:, javascript:, malformed).
+export function resolveUrl(href: string, base: string): string | null {
+  try {
+    const u = new URL(href.trim(), base);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    u.hash = "";
+    return u.href;
+  } catch {
+    return null;
+  }
+}
+
+// The CSS a page loads, from the stylesheets the caller supplied, and the linked ones (also
+// those @imported by supplied sheets) it did not supply. data: stylesheets carry their own CSS.
+function pageStyles(item: ContextItem): { css: string; missing: string[] } {
+  const supplied = new Map<string, string>();
+  for (const r of item.resources ?? []) {
+    const url = resolveUrl(r.url, r.url);
+    if (url && !supplied.has(url)) supplied.set(url, r.content);
+  }
+  const page = pageStyleRefs(item.content);
+  const base = resolveUrl(page.baseHref ?? "", item.source.uri ?? PAGE_BASE_FALLBACK) ?? PAGE_BASE_FALLBACK;
+  const css: string[] = [];
+  const missing: string[] = [];
+  const seen = new Set<string>();
+  const visit = (href: string, from: string) => {
+    if (/^\s*data:/i.test(href)) {
+      const inline = dataCss(href);
+      if (inline === null) missing.push("data: stylesheet that could not be decoded");
+      else css.push(inline);
+      return;
+    }
+    const url = resolveUrl(href, from);
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    const content = supplied.get(url);
+    if (content === undefined) return void missing.push(url);
+    css.push(content);
+    for (const imp of cssImports(content)) visit(imp, url);
+  };
+  for (const href of page.stylesheets) visit(href, base);
+  return { css: css.join("\n"), missing };
+}
+
+function dataCss(href: string): string | null {
+  const m = /^\s*data:([^,]*),(.*)$/is.exec(href);
+  if (!m) return null;
+  try {
+    return /;base64$/i.test(m[1]!) ? atob(m[2]!) : decodeURIComponent(m[2]!);
+  } catch {
+    return null;
+  }
+}
+
 // Text the browser did not show, as extra segments. Static segments are kept as they are.
 function renderedSegments(render: RenderReport & { ok: true }): Segment[] {
   return render.hidden.map((h) => ({ channel: h.certain ? "hidden" : "conditional", text: h.text, how: `rendered: ${h.how}` }));
@@ -81,10 +138,17 @@ export function scanContextItem(item: ContextItem, bundle: RuleBundle, render?: 
     return findings;
   }
 
-  const { segments, styleOverflow } = extractSegments(item.content);
-  if (styleOverflow) {
+  const styles = pageStyles(item);
+  const { segments, styleOverflow } = extractSegments(item.content, styles.css);
+  if (styleOverflow && !render?.ok) {
     // Too much CSS to analyse within limits: visibility is unknown, so do not let it pass clean.
+    // A successful render applied all of it with the real cascade, so it covers this.
     push({ rule_id: "CTX.STYLE_UNANALYSABLE", severity: "soft", item_id: item.id, channel: "hidden", excerpt: "page CSS exceeds analysis limits" });
+  }
+  if (styles.missing.length > 0) {
+    // Hiding can live in CSS we were not given, so what a person sees is unknown.
+    const more = styles.missing.length > 1 ? ` and ${styles.missing.length - 1} more` : "";
+    push({ rule_id: "CTX.STYLES_NOT_PROVIDED", severity: "soft", item_id: item.id, channel: "hidden", excerpt: `${styles.missing[0]!.slice(0, 120)}${more}` });
   }
   if (render?.ok === false) {
     push({ rule_id: "CTX.RENDER_FAILED", severity: "soft", item_id: item.id, channel: "hidden", excerpt: render.error.slice(0, 80) });

@@ -1,15 +1,21 @@
-import type { RenderReport, RenderedText } from "@mwf/core";
+import { type ContextItem, PAGE_BASE_FALLBACK, type RenderReport, type RenderedText, resolveUrl } from "@mwf/core";
 import { type Browser, type BrowserContext, chromium } from "playwright";
 import { type ProbeResult, probe } from "./probe.js";
 
 // Renders untrusted HTML in headless Chromium to find text a person would not see.
 // The page is sandboxed: its scripts are disabled and every network request is refused, so a
 // page cannot phone home, load more content, or behave differently for the firewall.
-// Stylesheets the page links to are not loaded either (see docs/implementation-plan.md, M5).
+// Stylesheets the page links to are applied only from what the caller supplied.
 
 // Sent as source text. tsx/esbuild may wrap named functions in a `__name` helper that does not
 // exist in the page, so a no-op one is defined around the probe.
 const PROBE_SOURCE = (maxTexts: number) => `(() => { const __name = (f) => f; return (${probe.toString()})(${maxTexts}); })()`;
+
+// The page's address and the stylesheets the agent's browser loaded for it.
+export interface PageInput {
+  url?: string | undefined;
+  stylesheets?: { url: string; content: string }[] | undefined;
+}
 
 export interface Viewport {
   name: string;
@@ -25,6 +31,7 @@ export const VIEWPORTS: Viewport[] = [
 
 export interface RendererOptions {
   timeoutMs?: number;
+  // The page and its stylesheets together.
   maxHtmlChars?: number;
   maxTexts?: number;
   // Pages rendered at once; more wait their turn.
@@ -51,7 +58,7 @@ export class PageRenderer {
   constructor(opts: RendererOptions = {}) {
     this.#opts = {
       timeoutMs: opts.timeoutMs ?? 8000,
-      maxHtmlChars: opts.maxHtmlChars ?? 2_000_000,
+      maxHtmlChars: opts.maxHtmlChars ?? 4_000_000,
       maxTexts: opts.maxTexts ?? 20_000,
       concurrency: opts.concurrency ?? 4,
       viewports: opts.viewports ?? VIEWPORTS,
@@ -60,15 +67,16 @@ export class PageRenderer {
   }
 
   // Never throws: any failure is a report with ok: false, which the scanner turns into a REVIEW.
-  async render(html: string): Promise<RenderReport> {
-    if (html.length > this.#opts.maxHtmlChars) return { ok: false, error: "page too large to render" };
+  async render(html: string, page: PageInput = {}): Promise<RenderReport> {
+    const size = html.length + (page.stylesheets ?? []).reduce((n, s) => n + s.content.length, 0);
+    if (size > this.#opts.maxHtmlChars) return { ok: false, error: "page too large to render" };
     await this.#acquire();
     const run: Run = { done: false, contexts: [] };
     let timer: NodeJS.Timeout | undefined;
     let work: Promise<unknown> = Promise.resolve();
     try {
       const browser = await this.#launch();
-      const views = Promise.all(this.#opts.viewports.map((v) => this.#probe(browser, run, html, v)));
+      const views = Promise.all(this.#opts.viewports.map((v) => this.#probe(browser, run, html, page, v)));
       work = views.catch(() => {}); // after a timeout the closed contexts make it reject
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error(`timed out after ${this.#opts.timeoutMs} ms`)), this.#opts.timeoutMs);
@@ -88,6 +96,11 @@ export class PageRenderer {
     }
   }
 
+  // A context item as sent to /v1/context/inspect: its page, address and supplied stylesheets.
+  renderItem(item: ContextItem): Promise<RenderReport> {
+    return this.render(item.content, { url: item.source.uri, stylesheets: item.resources });
+  }
+
   async close(): Promise<void> {
     const browser = this.#browser;
     this.#browser = undefined;
@@ -101,10 +114,9 @@ export class PageRenderer {
     return this.#browser;
   }
 
-  async #probe(browser: Browser, run: Run, html: string, v: Viewport): Promise<ProbeResult> {
+  async #probe(browser: Browser, run: Run, html: string, input: PageInput, v: Viewport): Promise<ProbeResult> {
     const context = await browser.newContext({
       javaScriptEnabled: false,
-      offline: true,
       serviceWorkers: "block",
       acceptDownloads: false,
       viewport: { width: v.width, height: v.height },
@@ -116,9 +128,34 @@ export class PageRenderer {
       throw new Error("render already finished");
     }
     run.contexts.push(context);
-    await context.route("**/*", (route) => route.abort("blockedbyclient"));
+    // Every request is answered here; nothing reaches the network. The page is served at its
+    // own URL so relative links resolve as they did for the agent, and each stylesheet comes
+    // from what the caller supplied.
+    const pageUrl = resolveUrl(input.url ?? "", PAGE_BASE_FALLBACK) ?? PAGE_BASE_FALLBACK;
+    const styles = new Map<string, string>();
+    for (const s of input.stylesheets ?? []) {
+      const url = resolveUrl(s.url, s.url);
+      if (url && !styles.has(url)) styles.set(url, s.content);
+    }
+    let served = false;
+    await context.route("**/*", (route) => {
+      const req = route.request();
+      if (req.isNavigationRequest()) {
+        if (!served) {
+          served = true;
+          return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html });
+        }
+        // Meta refresh, iframes: "No Content" keeps the browser where it is. Refusing the
+        // request instead would load Chromium's error page over the one being checked.
+        return route.fulfill({ status: 204 });
+      }
+      const url = resolveUrl(req.url(), req.url());
+      const css = url && req.resourceType() === "stylesheet" ? styles.get(url) : undefined;
+      if (css !== undefined) return route.fulfill({ status: 200, contentType: "text/css; charset=utf-8", body: css });
+      return route.abort("blockedbyclient");
+    });
     const page = await context.newPage();
-    await page.setContent(html, { waitUntil: "domcontentloaded", timeout: this.#opts.timeoutMs });
+    await page.goto(pageUrl, { waitUntil: "load", timeout: this.#opts.timeoutMs });
     return page.evaluate(PROBE_SOURCE(this.#opts.maxTexts)) as Promise<ProbeResult>;
   }
 

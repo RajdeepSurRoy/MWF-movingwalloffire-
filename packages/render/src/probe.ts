@@ -26,6 +26,7 @@ export function probe(maxTexts: number): ProbeResult {
   const parentOf = (e: Node): Element | null => parentGet.call(e) as Element | null;
   const rectOf = (e: Element): DOMRect => Element.prototype.getBoundingClientRect.call(e);
   const closest = (e: Element, sel: string): Element | null => Element.prototype.closest.call(e, sel);
+  const matches = (e: Element, sel: string): boolean => Element.prototype.matches.call(e, sel);
 
   const hits: ProbeHit[] = [];
   const canvas = Document.prototype.createElement.call(document, "canvas") as HTMLCanvasElement;
@@ -129,9 +130,10 @@ export function probe(maxTexts: number): ProbeResult {
   const overflowX = [getComputedStyle(root).overflowX, getComputedStyle(start).overflowX];
   const noHorizontalScroll = overflowX.some((o) => o === "hidden" || o === "clip");
   const NOT_TEXT = "script, style";
-  // Content a visitor opens themselves (dropdowns, closed <details>) or a form field's own text:
-  // its layout says little, so only the painted-invisibly checks apply, plus the control's box.
-  const REVEALABLE = "textarea, select, option, datalist, details:not([open]) > :not(summary)";
+  // A form field's own text, or content a visitor opens themselves (dropdown options, a closed
+  // <details>): the text has no layout of its own, so the painted-invisibly checks apply to the
+  // text and the layout checks to the field or <details> box.
+  const FIELDS = "textarea, select, datalist";
 
   const walker = Document.prototype.createTreeWalker.call(document, start, NodeFilter.SHOW_TEXT);
   const range = Document.prototype.createRange.call(document);
@@ -147,12 +149,43 @@ export function probe(maxTexts: number): ProbeResult {
     const el = parentOf(n);
     if (!el || closest(el, NOT_TEXT)) continue;
     const hit = (how: string, certain: boolean) => hits.push({ i, text: text.slice(0, 4000), how, certain });
-    const control = closest(el, REVEALABLE);
-    if (control) {
+    const field = closest(el, FIELDS);
+    const details = closest(el, "details:not([open])");
+    const host = field ?? (details && !closest(el, "summary") ? details : null);
+    if (host) {
       const how = paintedInvisibly(el);
-      const box = rectOf(closest(el, "textarea, select") ?? control);
-      if (how) hit(how, true);
-      else if (box.width > 0 && (box.right + scrollX <= 0 || box.bottom + scrollY <= 0)) hit("positioned off the page", true);
+      if (how) {
+        hit(how, true);
+        continue;
+      }
+      // Hidden by the page between the text and the control, where the browser's own hiding
+      // (a closed dropdown or <details>) does not explain it.
+      let hiddenBy = "";
+      for (let e: Element | null = el; e && e !== host; e = parentOf(e)) {
+        const s = getComputedStyle(e);
+        if (s.display === "none") hiddenBy = "not rendered";
+        else if (s.visibility !== "visible") hiddenBy ||= "visibility hidden";
+      }
+      if (matches(host, "datalist")) {
+        // Only a datalist's options are ever offered to the visitor.
+        if (!closest(el, "option")) hiddenBy ||= "not rendered";
+      } else {
+        const box = rectOf(host);
+        const hs = getComputedStyle(host);
+        if (box.width * box.height === 0) hiddenBy ||= "not rendered";
+        else if (hs.visibility !== "visible") hiddenBy ||= "visibility hidden";
+        else if (box.right + scrollX <= 0 || box.bottom + scrollY <= 0 || (noHorizontalScroll && box.left >= innerWidth)) {
+          hit("positioned off the page", true);
+          continue;
+        } else {
+          const c = clipped(host, box);
+          if (c.area < 4) {
+            hit(c.byClip ? "clipped away" : "clipped by a container", c.byClip);
+            continue;
+          }
+        }
+      }
+      if (hiddenBy) hit(hiddenBy, false);
       continue;
     }
     const cs = getComputedStyle(el);

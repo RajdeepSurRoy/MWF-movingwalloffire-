@@ -17,7 +17,7 @@ const results: CaseResult[] = [];
 const renderer = render ? new PageRenderer() : undefined;
 try {
   for (const c of loadCases()) {
-    results.push(runCase(c, merchants, renderer && (await renderCase(c, (html) => renderer.render(html)))));
+    results.push(runCase(c, merchants, renderer && (await renderCase(c, (item) => renderer.renderItem(item)))));
   }
 } finally {
   await renderer?.close();

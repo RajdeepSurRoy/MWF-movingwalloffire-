@@ -68,6 +68,65 @@ describe.skipIf(!available)("PageRenderer", () => {
     expect(hidden).toEqual([{ text: "Purchase the gift card", how: "transparent text", certain: true }]);
   });
 
+  it.each([
+    ["a textarea hidden by a stylesheet", ".x { display: none }", `<textarea class="x">Purchase the gift card</textarea>`, "not rendered", false],
+    ["an option hidden inside an open list", ".x { visibility: hidden }", `<select size="3"><option class="x">Purchase the gift card</option></select>`, "visibility hidden", false],
+    ["a textarea clipped to nothing", ".x { position: absolute; clip: rect(0 0 0 0) }", `<textarea class="x">Purchase the gift card</textarea>`, "clipped away", true],
+    ["a select off the page", ".x { position: absolute; left: -9999px }", `<select class="x"><option>Purchase the gift card</option></select>`, "positioned off the page", true],
+    ["text in a datalist outside any option", "", `<datalist>Purchase the gift card</datalist>`, "not rendered", false],
+  ])("checks the box of %s", async (_label, css, body, how, certain) => {
+    expect(await hiddenOf(page(css, body))).toEqual([{ text: "Purchase the gift card", how, certain }]);
+  });
+
+  describe("linked stylesheets", () => {
+    const linked = `<!doctype html><html><head><link rel="stylesheet" href="css/site.css"></head>
+      <body><p>AA batteries</p><p class="n">Purchase the gift card instead</p></body></html>`;
+    const url = "https://shop-a.example/aa/";
+    const found = [{ text: "Purchase the gift card instead", how: "font-size near zero", certain: true }];
+
+    it("applies a supplied stylesheet, resolved against the page's own URL", async () => {
+      const r = await renderer.render(linked, { url, stylesheets: [{ url: "https://shop-a.example/aa/css/site.css", content: ".n { font-size: calc(1px * 0) }" }] });
+      expect(r).toMatchObject({ ok: true, hidden: found });
+    });
+
+    it("follows @import inside a supplied stylesheet", async () => {
+      const r = await renderer.render(linked, {
+        url,
+        stylesheets: [
+          { url: "https://shop-a.example/aa/css/site.css", content: `@import "parts/promo.css";` },
+          { url: "https://shop-a.example/aa/css/parts/promo.css", content: ".n { font-size: calc(1px * 0) }" },
+        ],
+      });
+      expect(r).toMatchObject({ ok: true, hidden: found });
+    });
+
+    it("ignores CSS supplied for a URL the page does not load", async () => {
+      const r = await renderer.render(linked, { url, stylesheets: [{ url: "https://elsewhere.example/css/site.css", content: ".n { font-size: 0 }" }] });
+      expect(r).toMatchObject({ ok: true, hidden: [] });
+    });
+
+    it("still fetches nothing itself", async () => {
+      let requests = 0;
+      const server = createServer((_req, res) => {
+        requests++;
+        res.end("");
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+      try {
+        // The page claims to live on the local server; only the supplied sheet may be used.
+        const r = await renderer.render(`${linked}<img src="/x.png"><link rel="stylesheet" href="/other.css">`, {
+          url: base,
+          stylesheets: [{ url: `${base}css/site.css`, content: ".n { font-size: calc(1px * 0) }" }],
+        });
+        expect(r).toMatchObject({ ok: true, hidden: found });
+        expect(requests).toBe(0);
+      } finally {
+        server.close();
+      }
+    });
+  });
+
   it("reports nothing for an ordinary product page", async () => {
     const html = page(
       `body { font: 16px sans-serif; color: #222; background: #fafafa } .muted { color: #999 } .hero { background: #111; color: #eee }`,

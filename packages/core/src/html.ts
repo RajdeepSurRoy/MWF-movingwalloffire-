@@ -59,9 +59,8 @@ export function hiddenByStyle(style: string | undefined): string {
   return "";
 }
 
-// Class names that hide content in common CSS frameworks. External stylesheets are not
-// fetched, so these are the only way to see hiding done there. A rendering-based check
-// (headless browser, Phase 1) is what closes this gap fully.
+// Class names that hide content in common CSS frameworks: the fallback for linked stylesheets
+// the caller did not supply (which are held for review anyway, CTX.STYLES_NOT_PROVIDED).
 const HIDING_CLASSES = new Set([
   "sr-only", "visually-hidden", "visuallyhidden", "screen-reader-text", "hidden", "d-none", "invisible",
   "hide", "is-hidden", "offscreen", "u-hidden", "a11y-hidden",
@@ -377,32 +376,60 @@ class SelectorIndex {
 
 export interface ExtractedPage {
   segments: Segment[];
-  // The page's <style> content exceeded the analysis limits; visibility is unknown.
+  // The page's CSS exceeded the analysis limits; visibility is unknown.
   styleOverflow: boolean;
 }
 
-// Splits an HTML page into what a human sees and what only an agent reading the source sees.
-export function extractSegments(html: string): ExtractedPage {
-  // First pass: collect <style> blocks, since a rule may come after the element it hides.
+// URLs a stylesheet pulls in with @import.
+export function cssImports(css: string): string[] {
+  return [...css.matchAll(/@import\s+(?:url\(\s*)?["']?([^"')\s;]+)/gi)].map((m) => m[1]!);
+}
+
+export interface PageStyleRefs {
+  // Text of the page's <style> blocks.
+  css: string;
+  // Stylesheets the page loads (<link rel="stylesheet">, @import in <style>), as written.
+  stylesheets: string[];
+  // The first <base href>, which relative links resolve against.
+  baseHref: string | undefined;
+}
+
+// The page's own CSS and the stylesheets it links to.
+export function pageStyleRefs(html: string): PageStyleRefs {
   let css = "";
   let inStyle = false;
-  const pre = new Parser(
+  let baseHref: string | undefined;
+  const stylesheets: string[] = [];
+  const parser = new Parser(
     {
       ontext(text) {
         if (inStyle) css += text + "\n";
       },
-      onopentag(name) {
+      onopentag(name, attrs) {
         if (name === "style") inStyle = true;
+        if (name === "base" && baseHref === undefined && attrs.href) baseHref = attrs.href;
+        const rel = (attrs.rel ?? "").toLowerCase().split(/\s+/);
+        // An "alternate stylesheet" is not applied unless the visitor picks it.
+        if (name === "link" && rel.includes("stylesheet") && !rel.includes("alternate") && attrs.href) stylesheets.push(attrs.href);
       },
       onclosetag(name) {
         if (name === "style") inStyle = false;
       },
     },
-    { decodeEntities: true, lowerCaseTags: true },
+    { decodeEntities: true, lowerCaseTags: true, lowerCaseAttributeNames: true },
   );
-  pre.write(html);
-  pre.end();
-  const { rules, overflow } = hidingSelectors(css);
+  parser.write(html);
+  parser.end();
+  stylesheets.push(...cssImports(css));
+  return { css, stylesheets, baseHref };
+}
+
+// Splits an HTML page into what a human sees and what only an agent reading the source sees.
+// `extraCss`: the page's linked stylesheets, when the caller supplied them.
+export function extractSegments(html: string, extraCss = ""): ExtractedPage {
+  // First pass: collect <style> blocks, since a rule may come after the element it hides.
+  const { css } = pageStyleRefs(html);
+  const { rules, overflow } = hidingSelectors(extraCss ? `${css}\n${extraCss}` : css);
   const index = new SelectorIndex(rules);
 
   const segments: Segment[] = [];

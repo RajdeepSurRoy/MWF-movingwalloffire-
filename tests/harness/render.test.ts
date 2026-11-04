@@ -1,3 +1,4 @@
+import type { ContextItem } from "@mwf/core";
 import { PageRenderer } from "@mwf/render";
 import { chromium } from "playwright";
 import { afterAll, describe, expect, it } from "vitest";
@@ -14,7 +15,7 @@ describe.skipIf(!available)("battery with page rendering", () => {
   const renderer = new PageRenderer();
   afterAll(() => renderer.close());
   const merchants = loadMerchants();
-  const render = (html: string) => renderer.render(html);
+  const render = (item: ContextItem) => renderer.renderItem(item);
 
   it.each(loadCases(undefined, ["render-only"]).map((c) => [c.id, c] as const))("%s: allowed statically, caught when rendered", async (_id, c) => {
     expect(runCase(c, merchants).actual).toBe("ALLOW");

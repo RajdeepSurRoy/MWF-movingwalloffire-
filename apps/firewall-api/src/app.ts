@@ -59,9 +59,9 @@ class NotFound extends Error {}
 
 const secret = (prefix: string) => prefix + randomBytes(32).toString("base64url");
 
-// Renders an HTML page in a headless browser (see @mwf/render). Must not throw; failures are
-// reports with ok: false. Without one, pages get the static visibility check only.
-export type Render = (html: string) => Promise<RenderReport>;
+// Renders an HTML context item in a headless browser (see @mwf/render). Must not throw;
+// failures are reports with ok: false. Without one, pages get the static visibility check only.
+export type Render = (item: ContextItem) => Promise<RenderReport>;
 
 export function buildApp({
   db = openDatabase(":memory:"),
@@ -132,7 +132,7 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     if (!render) return renders;
     const pages = items.filter((i) => i.trust !== "trusted" && i.content_type === "text/html");
     const reports = await Promise.all(
-      pages.map((i) => render(i.content).catch((err: unknown): RenderReport => ({ ok: false, error: `render failed: ${String(err)}` }))),
+      pages.map((i) => render(i).catch((err: unknown): RenderReport => ({ ok: false, error: `render failed: ${String(err)}` }))),
     );
     pages.forEach((item, k) => (renders[hashCanonical(item)] = reports[k]!));
     return renders;

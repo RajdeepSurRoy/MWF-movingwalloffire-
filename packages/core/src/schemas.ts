@@ -31,6 +31,20 @@ export const ContextItem = z.strictObject({
   trust: z.enum(["trusted", "untrusted"]).default("untrusted"),
   content_type: z.enum(["text/html", "text/plain", "application/json"]),
   content: z.string().max(500_000),
+  // Stylesheets the agent's browser loaded for this page (from <link rel="stylesheet"> and
+  // @import), as it received them. The firewall never fetches them itself: no SSRF, and the
+  // page's server cannot show the firewall different CSS than the agent got.
+  resources: z
+    .array(
+      z.strictObject({
+        url: z.url({ protocol: /^https?$/ }).max(2000),
+        content_type: z.literal("text/css"),
+        content: z.string().max(1_000_000),
+      }),
+    )
+    .max(50)
+    .refine((r) => r.reduce((n, x) => n + x.content.length, 0) <= 2_000_000, "resources exceed 2,000,000 characters in total")
+    .optional(),
 });
 export type ContextItem = z.infer<typeof ContextItem>;
 

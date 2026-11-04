@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  type ContextItem,
   type DecisionResult,
   type MerchantRecord,
   type RenderReport,
@@ -67,10 +68,10 @@ export function runCase(c: TestCase, merchants: MerchantRecord[] = loadMerchants
 }
 
 // Renders the case's untrusted HTML pages, as the API does at the context checkpoint.
-export async function renderCase(c: TestCase, render: (html: string) => Promise<RenderReport>): Promise<RenderReports> {
+export async function renderCase(c: TestCase, render: (item: ContextItem) => Promise<RenderReport>): Promise<RenderReports> {
   const renders: RenderReports = {};
   for (const item of c.context) {
-    if (item.trust !== "trusted" && item.content_type === "text/html") renders[hashCanonical(item)] = await render(item.content);
+    if (item.trust !== "trusted" && item.content_type === "text/html") renders[hashCanonical(item)] = await render(item);
   }
   return renders;
 }
