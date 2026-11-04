@@ -2,18 +2,30 @@
 //   npm run harness                      print the report
 //   npm run harness -- --json out.json   also write it as JSON
 //   npm run harness -- --strict          exit 1 unless ASR = 0, FPR = 0 and every case matches
+//   npm run harness -- --render          also render every page in headless Chromium
 import { writeFileSync } from "node:fs";
-import { loadCases, loadMerchants, runCase, summarize } from "./harness.js";
+import { PageRenderer } from "@mwf/render";
+import { type CaseResult, loadCases, loadMerchants, renderCase, runCase, summarize } from "./harness.js";
 
 const args = process.argv.slice(2);
 const jsonPath = args.includes("--json") ? args[args.indexOf("--json") + 1] : undefined;
 const strict = args.includes("--strict");
+const render = args.includes("--render");
 
 const merchants = loadMerchants();
-const report = summarize(loadCases().map((c) => runCase(c, merchants)));
+const results: CaseResult[] = [];
+const renderer = render ? new PageRenderer() : undefined;
+try {
+  for (const c of loadCases()) {
+    results.push(runCase(c, merchants, renderer && (await renderCase(c, (html) => renderer.render(html)))));
+  }
+} finally {
+  await renderer?.close();
+}
+const report = summarize(results);
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 
-console.log(`MWF test battery — ${report.cases} cases, ${report.correct} match ground truth\n`);
+console.log(`MWF test battery${render ? " (with page rendering)" : ""} — ${report.cases} cases, ${report.correct} match ground truth\n`);
 console.log("category                   cases  correct  ALLOW  BLOCK  REVIEW");
 for (const s of report.byCategory) {
   console.log(

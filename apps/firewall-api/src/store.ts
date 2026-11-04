@@ -97,6 +97,8 @@ export function openDatabase(path: string): DatabaseSync {
   addColumnIfMissing(db, "context_items", "quarantined", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "action_tokens", "expires_at", "TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing(db, "action_tokens", "idempotency_key", "TEXT NOT NULL DEFAULT ''");
+  // Headless-browser view of an HTML item (RenderReport JSON); NULL when it was not rendered.
+  addColumnIfMissing(db, "context_log", "render", "TEXT");
   return db;
 }
 

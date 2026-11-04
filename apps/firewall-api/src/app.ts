@@ -13,6 +13,8 @@ import {
   type MerchantRecord,
   POLICY_VERSION,
   ProposedAction,
+  RenderReport,
+  type RenderReports,
   type RuleBundle,
   checkAction,
   checkCommit,
@@ -57,7 +59,15 @@ class NotFound extends Error {}
 
 const secret = (prefix: string) => prefix + randomBytes(32).toString("base64url");
 
-export function buildApp({ db = openDatabase(":memory:"), bundle = getDefaultBundle() }: { db?: DatabaseSync; bundle?: RuleBundle } = {}) {
+// Renders an HTML page in a headless browser (see @mwf/render). Must not throw; failures are
+// reports with ok: false. Without one, pages get the static visibility check only.
+export type Render = (html: string) => Promise<RenderReport>;
+
+export function buildApp({
+  db = openDatabase(":memory:"),
+  bundle = getDefaultBundle(),
+  render,
+}: { db?: DatabaseSync; bundle?: RuleBundle; render?: Render } = {}) {
   const app = Fastify({ logger: false, bodyLimit: 1_048_576 });
   const ledger = new Ledger(db);
 
@@ -76,12 +86,12 @@ export function buildApp({ db = openDatabase(":memory:"), bundle = getDefaultBun
 
   // Every /v1 route lives in this plugin, so its auth hook applies to the matched routes
   // whatever the URL encoding. Routes outside it (only /healthz) are public.
-  app.register(async (v1) => v1Routes(v1, db, ledger, bundle), { prefix: "/v1" });
+  app.register(async (v1) => v1Routes(v1, db, ledger, bundle, render), { prefix: "/v1" });
 
   return app;
 }
 
-function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle: RuleBundle) {
+function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle: RuleBundle, render: Render | undefined) {
   v1.addHook("onRequest", async (req, reply) => {
     const tenant = authenticate(db, req.headers.authorization);
     if (!tenant) return reply.code(401).send({ error: "unauthorized" });
@@ -103,16 +113,29 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
   }
 
   // Every version of every item the session has seen, plus the ids ever quarantined.
-  function loadContext(sessionId: string): { items: ContextItem[]; quarantined: string[] } {
-    const rows = db.prepare("SELECT item, item_id, quarantined FROM context_log WHERE session_id = ? ORDER BY seq").all(sessionId) as {
-      item: string;
-      item_id: string;
-      quarantined: number;
-    }[];
+  function loadContext(sessionId: string): { items: ContextItem[]; quarantined: string[]; renders: RenderReports } {
+    const rows = db
+      .prepare("SELECT item, item_id, content_hash, quarantined, render FROM context_log WHERE session_id = ? ORDER BY seq")
+      .all(sessionId) as { item: string; item_id: string; content_hash: string; quarantined: number; render: string | null }[];
+    const renders: RenderReports = {};
+    for (const r of rows) if (r.render) renders[r.content_hash] = RenderReport.parse(JSON.parse(r.render));
     return {
       items: rows.map((r) => ContextItem.parse(JSON.parse(r.item))),
       quarantined: [...new Set(rows.filter((r) => r.quarantined).map((r) => r.item_id))],
+      renders,
     };
+  }
+
+  // Renders untrusted HTML items, keyed by item hash. Trusted and non-HTML items are not rendered.
+  async function renderItems(items: ContextItem[]): Promise<RenderReports> {
+    const renders: RenderReports = {};
+    if (!render) return renders;
+    const pages = items.filter((i) => i.trust !== "trusted" && i.content_type === "text/html");
+    const reports = await Promise.all(
+      pages.map((i) => render(i.content).catch((err: unknown): RenderReport => ({ ok: false, error: `render failed: ${String(err)}` }))),
+    );
+    pages.forEach((item, k) => (renders[hashCanonical(item)] = reports[k]!));
+    return renders;
   }
 
   function loadMerchants(tenantId: string): MerchantRecord[] {
@@ -190,14 +213,17 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     const tenantId = tenantOf(req);
     const body = InspectContextBody.parse(req.body);
     loadSession(tenantId, body.session_id);
-    const result = checkContext(body.items, bundle);
+    const renders = await renderItems(body.items);
+    const result = checkContext(body.items, bundle, renders);
     const quarantined = new Set(result.quarantined);
     const insert = db.prepare(
-      "INSERT OR IGNORE INTO context_log (session_id, item_id, trust, content_hash, item, quarantined, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO context_log (session_id, item_id, trust, content_hash, item, quarantined, created_at, render) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     );
     const now = new Date().toISOString();
     for (const item of body.items) {
-      insert.run(body.session_id, item.id, item.trust, hashCanonical(item), JSON.stringify(item), quarantined.has(item.id) ? 1 : 0, now);
+      const hash = hashCanonical(item);
+      const report = renders[hash];
+      insert.run(body.session_id, item.id, item.trust, hash, JSON.stringify(item), quarantined.has(item.id) ? 1 : 0, now, report ? JSON.stringify(report) : null);
     }
     const rec = record(tenantId, "context", body.session_id, result);
     return { ...respond(rec), items: body.items.map((i) => ({ id: i.id, quarantined: quarantined.has(i.id) })) };
@@ -215,6 +241,7 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
         mandate: session.mandate,
         context: context.items,
         quarantined: context.quarantined,
+        renders: context.renders,
         action: body.action,
         now: new Date(),
         merchants: loadMerchants(tenantId),

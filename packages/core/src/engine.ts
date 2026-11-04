@@ -2,6 +2,7 @@ import { canonicalize, hashCanonical } from "./canonical.js";
 import { type MerchantRecord, lookalikeOf, normalizeEmail, sameId } from "./merchant.js";
 import { formatCents, toCents } from "./money.js";
 import { type RuleBundle, getDefaultBundle, regex } from "./rules.js";
+import type { RenderReports } from "./rendered.js";
 import { type Finding, scanContext, scanText } from "./scan.js";
 import {
   type ContextItem,
@@ -59,8 +60,12 @@ export function checkIntent(
 // ---------------------------------------------------------------------------
 // Checkpoint 2 — context scan. Hard findings quarantine the item.
 
-export function checkContext(items: ContextItem[], bundle = getDefaultBundle()): EngineResult & { quarantined: string[] } {
-  const findings = scanContext(items, bundle);
+export function checkContext(
+  items: ContextItem[],
+  bundle = getDefaultBundle(),
+  renders?: RenderReports,
+): EngineResult & { quarantined: string[] } {
+  const findings = scanContext(items, bundle, renders);
   const hard = findings.filter((f) => f.severity === "hard");
   const soft = findings.filter((f) => f.severity === "soft");
   const quarantined = [...new Set(hard.map((f) => f.item_id))];
@@ -83,6 +88,8 @@ export interface ActionCheckInput {
   priorRisk?: number;
   // Context item ids quarantined at checkpoint 2. Sticky: a later rule bundle cannot un-quarantine them.
   quarantined?: string[];
+  // Headless-browser views of the context items, keyed by item hash. Missing: static scan only.
+  renders?: RenderReports;
 }
 
 function checkPayment(input: ActionCheckInput, bundle: RuleBundle, block: Reason[], review: Reason[]) {
@@ -162,7 +169,7 @@ export function checkAction(input: ActionCheckInput, bundle = getDefaultBundle()
 
   // Context signals. Hard signatures in content the action relied on are a BLOCK;
   // elsewhere in the session they are a REVIEW until the provenance graph (M4) can prove a path.
-  const findings = scanContext(input.context, bundle);
+  const findings = scanContext(input.context, bundle, input.renders);
   const onPath = new Set(action.derived_from);
   for (const f of findings) {
     if (f.severity === "hard") (onPath.has(f.item_id) ? block : review).push(findingReason(f));

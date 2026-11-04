@@ -102,7 +102,9 @@
 
 1. **SDK (`packages/sdk`):** `startSession(intent)`, `inspectContext(items)`, `checkAction(action)`, `commitAction(token)`. It wraps the agent's tool calls so the agent never talks to PayPal directly.
    - **Trust tags and inspection are set by the SDK, not the agent.** The SDK wraps the fetch / browse tools, sends every result to `/v1/context/inspect` itself, and tags it `untrusted` unless it came from the business's own systems. Today the caller chooses `trust`, so a compromised agent could mark a malicious page `trusted` (unscanned) or skip inspection; found in the M2 security review (2026-11-03).
-   - **Known gap:** hiding done in *external* stylesheets is only caught via common hiding class names (`.sr-only`, `.d-none`, ...). A headless-render visibility check closes it (Phase 1).
+   - **Rendered visibility check — done 2026-11-04** (`packages/render`). The API renders every untrusted HTML page in headless Chromium (scripts off, network refused, desktop + phone viewport) and adds text the browser hides to the scan; it can only tighten. 11 render-only attacks in `tests/fixtures/render-only/` pass the static scan and are caught when rendered; the main battery keeps 0 false positives with rendering on.
+   - **Remaining gap — external stylesheets.** With the network refused, CSS the page *links* to is not loaded, so hiding done there is still only caught via common hiding class names (`.sr-only`, `.d-none`, ...). Fix in the SDK: since it wraps the agent's browser, send the rendered page (or its stylesheets) with the context item, or run the visibility probe in the agent's own browser and report it. A firewall-side fetch of the stylesheets is the fallback, behind an allowlist and SSRF guards.
+   - **Not yet checked by the render:** text covered by another element (an opaque box on top), and content inside iframes.
 2. **Agent:** reads shop pages, chooses items, calls one `propose_purchase` tool. Runs through the SDK.
 3. **Record/replay** of agent runs so end-to-end tests are repeatable without calling the model each time.
 4. **Baseline mode:** the same agent with the firewall switched off, for the "with vs. without" demo step.

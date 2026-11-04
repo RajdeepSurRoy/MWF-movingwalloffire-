@@ -13,6 +13,8 @@ Code can't do these: they need an account, a browser login, a decision, or a per
 
 ## Per developer, once
 
+- [ ] **J + R — Install headless Chromium** for the page-visibility check: `npm run install-browser -w @mwf/render` (~100 MB). Without it the API holds every HTML page for REVIEW (`CTX.RENDER_FAILED`), and the render tests are skipped locally.
+
 - [ ] **J + R — Make your own local MWF API key:** `npm run keys:create -- <your-name>`, put it in `.env` as `MWF_API_KEY`. Each of us has our own; nothing to share.
 - [ ] **J + R — Register the demo merchant** for your tenant: `npm run merchants:add -- <your-name> shop-a "Shop A" <payee email>`. Use the **sandbox business account email** from PayPal so payee checks match what PayPal actually pays.
 - [ ] **J + R — Set up a shared password-manager vault** (e.g. Bitwarden free, 2 users) for the one shared demo sandbox app's credentials, if we decide to have one.
@@ -26,6 +28,6 @@ Code can't do these: they need an account, a browser login, a decision, or a per
 
 ## Later
 
-- [ ] **R — Deploy** around **Nov 9** (M6): firewall API on Railway / Render / Fly (needs a persistent disk for SQLite), shop + console on Vercel. Set env vars in each host's dashboard.
+- [ ] **R — Deploy** around **Nov 9** (M6): firewall API on Railway / Render / Fly (needs a persistent disk for SQLite, and Chromium in the image: `npx playwright install --with-deps --only-shell chromium` in the build step, ~0.5 GB RAM headroom per concurrent render), shop + console on Vercel. Set env vars in each host's dashboard.
 - [ ] **R — Register the sandbox webhook** against the deployed URL (or a cloudflared / ngrok tunnel before that) and put its ID in `PAYPAL_WEBHOOK_ID`.
 - [ ] **J — Record the demo video** and write the submission (M11, by Nov 15).

@@ -2,7 +2,7 @@
 
 **An adaptive payment firewall for AI shopping agents, built on PayPal.**
 
-> Status: **in build.** The deterministic firewall (milestone M2) works: it blocks every obvious attack in our 110-case test battery with no false blocks. This README describes what we are building for the PayPal hackathon (submission deadline **November 15, 2026**). Sections marked *(planned)* are design intent, not working features. The full security design — including how MWF grows beyond payments to all agentic workflows — is in [docs/architecture.md](docs/architecture.md).
+> Status: **in build.** The deterministic firewall (milestone M2) works: it blocks every obvious attack in our 118-case test battery with no false blocks, and renders each page in a sandboxed headless browser to catch text hidden with CSS tricks a parser would miss. This README describes what we are building for the PayPal hackathon (submission deadline **November 15, 2026**). Sections marked *(planned)* are design intent, not working features. The full security design — including how MWF grows beyond payments to all agentic workflows — is in [docs/architecture.md](docs/architecture.md).
 
 ---
 
@@ -171,13 +171,15 @@ capture void      hold → human → re-check → capture / void
 
 Requires Node 24+.
 
-1. `npm install`
+1. `npm install`, then `npm run install-browser -w @mwf/render` (downloads headless Chromium, ~100 MB, used to check what a person actually sees on a page).
 2. Copy `.env.example` to `.env` and fill in your own PayPal **Sandbox** credentials ([PayPal Developer](https://developer.paypal.com)).
 3. `npm run typecheck` and `npm test`
-4. `npm run harness` runs the test battery (110 ground-truth cases) and prints the attack success rate and false-positive rate.
+4. `npm run harness` runs the test battery (118 ground-truth cases) and prints the attack success rate and false-positive rate. Add `-- --render` to render every page in headless Chromium as the API does.
 5. `npm run keys:create -- <your-name>` prints your own local API key once (only its hash is stored). Put it in `.env` as `MWF_API_KEY`. Then register the merchants your agent may pay: `npm run merchants:add -- <your-name> shop-a "Shop A" payments@shop-a.example`.
 6. `npm run dev:api` starts the firewall API on http://127.0.0.1:8787. `/healthz` is open; every `/v1/*` endpoint needs `Authorization: Bearer <key>`. Rules live in [packages/core/rules/bundle.json](packages/core/rules/bundle.json) (versioned; every decision logs the version). Only `/v1/actions/check` can ALLOW, and only an ALLOW returns a single-use action token for `/v1/actions/commit`.
 7. `npm run ledger:verify` walks the hash-chained decision ledger.
+
+Page rendering: `/v1/context/inspect` renders each untrusted HTML page in headless Chromium at a desktop and a phone size, with the page's scripts off and every network request refused. Text the browser paints invisibly (transparent, off the page, colour equal to background, tiny, clipped away) is treated as hidden; hiding real UIs also use (display:none, a collapsed container, one screen size only) gets REVIEW. Rendering only adds findings, never clears one, and a page that cannot be rendered gets REVIEW. Set `MWF_RENDER=off` to use the static check only.
 
 Repo layout: `packages/` (core, sdk), `apps/` (firewall-api, shop, agent, console), `services/sensors`, `redteam/`, `tests/fixtures/`, `spikes/`. The build order is in [docs/implementation-plan.md](docs/implementation-plan.md).
 

@@ -8,3 +8,4 @@ export * from "./scan.js";
 export * from "./merchant.js";
 export * from "./money.js";
 export * from "./html.js";
+export * from "./rendered.js";

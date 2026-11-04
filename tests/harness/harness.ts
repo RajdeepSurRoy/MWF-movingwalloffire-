@@ -1,6 +1,16 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type DecisionResult, type MerchantRecord, type TestCase, TestCase as TestCaseSchema, checkAction, checkCommit, hashCanonical } from "@mwf/core";
+import {
+  type DecisionResult,
+  type MerchantRecord,
+  type RenderReport,
+  type RenderReports,
+  type TestCase,
+  TestCase as TestCaseSchema,
+  checkAction,
+  checkCommit,
+  hashCanonical,
+} from "@mwf/core";
 
 export const FIXTURES_DIR = join(import.meta.dirname, "..", "fixtures");
 
@@ -8,9 +18,10 @@ export function loadMerchants(dir = FIXTURES_DIR): MerchantRecord[] {
   return JSON.parse(readFileSync(join(dir, "merchants.json"), "utf8")) as MerchantRecord[];
 }
 
-export function loadCases(dir = FIXTURES_DIR): TestCase[] {
+// `render-only` holds attacks only a real browser can see; they are run by render.test.ts.
+export function loadCases(dir = FIXTURES_DIR, subs = ["legit", "attacks"]): TestCase[] {
   const cases: TestCase[] = [];
-  for (const sub of ["legit", "attacks"]) {
+  for (const sub of subs) {
     for (const file of readdirSync(join(dir, sub)).filter((f) => f.endsWith(".json")).sort()) {
       const raw = JSON.parse(readFileSync(join(dir, sub, file), "utf8")) as unknown[];
       raw.forEach((c, i) => {
@@ -34,9 +45,17 @@ export interface CaseResult {
 
 // Runs one case through the decision logic only: no network, no PayPal.
 // The check runs first; only an ALLOW goes on to commit, as in production.
-export function runCase(c: TestCase, merchants: MerchantRecord[] = loadMerchants()): CaseResult {
+// `renders`: headless-browser views of the case's pages (see renderCase); omitted, static scan only.
+export function runCase(c: TestCase, merchants: MerchantRecord[] = loadMerchants(), renders?: RenderReports): CaseResult {
   const base = { id: c.id, category: c.category, expected: c.expected.decision };
-  const check = checkAction({ mandate: c.mandate, context: c.context, action: c.action, now: new Date(c.now), merchants });
+  const check = checkAction({
+    mandate: c.mandate,
+    context: c.context,
+    action: c.action,
+    now: new Date(c.now),
+    merchants,
+    ...(renders && { renders }),
+  });
   if (check.decision !== "ALLOW") return { ...base, actual: check.decision, decidedAt: "action", reasons: check.reasons };
 
   const approvedActionHash = hashCanonical(c.action);
@@ -45,6 +64,15 @@ export function runCase(c: TestCase, merchants: MerchantRecord[] = loadMerchants
     commit = checkCommit({ approvedActionHash, executedAction: c.action, alreadyCommitted: true });
   }
   return { ...base, actual: commit.decision, decidedAt: "commit", reasons: commit.reasons };
+}
+
+// Renders the case's untrusted HTML pages, as the API does at the context checkpoint.
+export async function renderCase(c: TestCase, render: (html: string) => Promise<RenderReport>): Promise<RenderReports> {
+  const renders: RenderReports = {};
+  for (const item of c.context) {
+    if (item.trust !== "trusted" && item.content_type === "text/html") renders[hashCanonical(item)] = await render(item.content);
+  }
+  return renders;
 }
 
 export interface CategoryStats {

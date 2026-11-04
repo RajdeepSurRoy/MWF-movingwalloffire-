@@ -1,4 +1,6 @@
-import { type Channel, extractSegments } from "./html.js";
+import { hashCanonical } from "./canonical.js";
+import { type Channel, type Segment, extractSegments } from "./html.js";
+import type { RenderReport, RenderReports } from "./rendered.js";
 import { type RuleBundle, type Severity, regex } from "./rules.js";
 import type { ContextItem } from "./schemas.js";
 
@@ -56,8 +58,14 @@ function stripExemptions(text: string, bundle: RuleBundle): string {
   return bundle.hidden_exemptions.some((p) => regex(bundle, p, "iu").test(t)) ? "" : text;
 }
 
+// Text the browser did not show, as extra segments. Static segments are kept as they are.
+function renderedSegments(render: RenderReport & { ok: true }): Segment[] {
+  return render.hidden.map((h) => ({ channel: h.certain ? "hidden" : "conditional", text: h.text, how: `rendered: ${h.how}` }));
+}
+
 // Scans one context item for injection artifacts. Pure and deterministic.
-export function scanContextItem(item: ContextItem, bundle: RuleBundle): Finding[] {
+// `render` is the headless-browser view of the page, when one was made (HTML items only).
+export function scanContextItem(item: ContextItem, bundle: RuleBundle, render?: RenderReport): Finding[] {
   if (item.trust === "trusted") return [];
   const findings: Finding[] = [];
   const push = (f: Finding) => {
@@ -77,6 +85,11 @@ export function scanContextItem(item: ContextItem, bundle: RuleBundle): Finding[
   if (styleOverflow) {
     // Too much CSS to analyse within limits: visibility is unknown, so do not let it pass clean.
     push({ rule_id: "CTX.STYLE_UNANALYSABLE", severity: "soft", item_id: item.id, channel: "hidden", excerpt: "page CSS exceeds analysis limits" });
+  }
+  if (render?.ok === false) {
+    push({ rule_id: "CTX.RENDER_FAILED", severity: "soft", item_id: item.id, channel: "hidden", excerpt: render.error.slice(0, 80) });
+  } else if (render) {
+    segments.push(...renderedSegments(render));
   }
   const byChannel = new Map<Channel, string[]>();
   for (const s of segments) {
@@ -99,8 +112,8 @@ export function scanContextItem(item: ContextItem, bundle: RuleBundle): Finding[
   return findings;
 }
 
-export function scanContext(items: ContextItem[], bundle: RuleBundle): Finding[] {
-  return items.flatMap((i) => scanContextItem(i, bundle));
+export function scanContext(items: ContextItem[], bundle: RuleBundle, renders?: RenderReports): Finding[] {
+  return items.flatMap((i) => scanContextItem(i, bundle, renders?.[hashCanonical(i)]));
 }
 
 // Scans free text (a user prompt, an agent output) as if a human could see all of it.
