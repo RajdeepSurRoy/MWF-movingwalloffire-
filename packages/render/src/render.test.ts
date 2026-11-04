@@ -141,21 +141,28 @@ describe.skipIf(!available)("PageRenderer", () => {
 
   it("never touches the network and never runs the page's scripts", async () => {
     let requests = 0;
+    let connections = 0;
     const server = createServer((_req, res) => {
       requests++;
       res.end("p { color: transparent }");
     });
+    server.on("connection", () => connections++);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
+      // preconnect / dns-prefetch open connections below request interception.
       const html = `<!doctype html><html><head>
+        <link rel="preconnect" href="${base}"><link rel="dns-prefetch" href="${base}">
+        <link rel="preconnect" href="https://mwf-leak-test.example">
         <meta http-equiv="refresh" content="0;url=${base}/next">
         <link rel="stylesheet" href="${base}/style.css"><script src="${base}/app.js"></script></head>
         <body><p>Clean text</p><img src="${base}/pixel.png"><iframe src="${base}/frame"></iframe>
         <script>fetch("${base}/beacon"); document.body.innerHTML = '<p style="color:transparent">from script</p>'</script></body></html>`;
       const r = await renderer.render(html);
-      expect(r).toEqual({ ok: true, viewports: ["desktop", "mobile"], hidden: [] });
+      expect(r).toEqual({ ok: true, viewports: ["desktop", "mobile"], hidden: [], unstyled: [`${base}/style.css`] });
       expect(requests).toBe(0);
+      await new Promise((resolve) => setTimeout(resolve, 300)); // let a late preconnect land
+      expect(connections).toBe(0);
     } finally {
       server.close();
     }

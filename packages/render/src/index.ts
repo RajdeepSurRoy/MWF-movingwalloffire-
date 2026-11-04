@@ -47,6 +47,8 @@ export interface RendererOptions {
 interface Run {
   done: boolean;
   contexts: BrowserContext[];
+  // Stylesheet requests that had nothing supplied to answer them.
+  unstyled: Set<string>;
 }
 
 export class PageRenderer {
@@ -71,19 +73,26 @@ export class PageRenderer {
     const size = html.length + (page.stylesheets ?? []).reduce((n, s) => n + s.content.length, 0);
     if (size > this.#opts.maxHtmlChars) return { ok: false, error: "page too large to render" };
     await this.#acquire();
-    const run: Run = { done: false, contexts: [] };
+    const run: Run = { done: false, contexts: [], unstyled: new Set() };
     let timer: NodeJS.Timeout | undefined;
     let work: Promise<unknown> = Promise.resolve();
     try {
-      const browser = await this.#launch();
-      const views = Promise.all(this.#opts.viewports.map((v) => this.#probe(browser, run, html, page, v)));
-      work = views.catch(() => {}); // after a timeout the closed contexts make it reject
+      // The deadline covers starting the browser too, so a stuck launch cannot stall the API.
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error(`timed out after ${this.#opts.timeoutMs} ms`)), this.#opts.timeoutMs);
       });
+      timeout.catch(() => {});
+      const browser = await Promise.race([this.#launch(), timeout]);
+      const views = Promise.all(this.#opts.viewports.map((v) => this.#probe(browser, run, html, page, v)));
+      work = views.catch(() => {}); // after a timeout the closed contexts make it reject
       const done = await Promise.race([views, timeout]);
       if (done.some((v) => v.truncated)) return { ok: false, error: `more than ${this.#opts.maxTexts} text nodes` };
-      return { ok: true, viewports: this.#opts.viewports.map((v) => v.name), hidden: merge(done, this.#opts.viewports) };
+      return {
+        ok: true,
+        viewports: this.#opts.viewports.map((v) => v.name),
+        hidden: merge(done, this.#opts.viewports),
+        unstyled: [...run.unstyled],
+      };
     } catch (err) {
       return { ok: false, error: `render failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}` };
     } finally {
@@ -110,13 +119,23 @@ export class PageRenderer {
   async #launch(): Promise<Browser> {
     const current = this.#browser && (await this.#browser.catch(() => undefined));
     if (current?.isConnected()) return current;
-    this.#browser = chromium.launch({ headless: true, chromiumSandbox: this.#opts.sandbox });
+    this.#browser = chromium.launch({
+      headless: true,
+      timeout: 20_000, // a launch that fails is retried by the next render
+      chromiumSandbox: this.#opts.sandbox,
+      // Request interception only sees requests. DNS prefetch and preconnect (<link
+      // rel="preconnect">) work below it, so also: no name resolves, prefetch is off, and any
+      // connection that still happens (an IP literal, loopback included) goes to a dead proxy port.
+      proxy: { server: "http://127.0.0.1:9", bypass: "<-loopback>" },
+      args: ["--host-resolver-rules=MAP * ~NOTFOUND", "--dns-prefetch-disable", "--disable-features=NetworkPrediction"],
+    });
     return this.#browser;
   }
 
   async #probe(browser: Browser, run: Run, html: string, input: PageInput, v: Viewport): Promise<ProbeResult> {
     const context = await browser.newContext({
       javaScriptEnabled: false,
+      offline: true, // route.fulfill still answers; nothing else gets out
       serviceWorkers: "block",
       acceptDownloads: false,
       viewport: { width: v.width, height: v.height },
@@ -149,9 +168,14 @@ export class PageRenderer {
         // request instead would load Chromium's error page over the one being checked.
         return route.fulfill({ status: 204 });
       }
-      const url = resolveUrl(req.url(), req.url());
-      const css = url && req.resourceType() === "stylesheet" ? styles.get(url) : undefined;
-      if (css !== undefined) return route.fulfill({ status: 200, contentType: "text/css; charset=utf-8", body: css });
+      if (req.resourceType() === "stylesheet") {
+        const url = resolveUrl(req.url(), req.url());
+        const css = url ? styles.get(url) : undefined;
+        if (css !== undefined) return route.fulfill({ status: 200, contentType: "text/css; charset=utf-8", body: css });
+        // The browser's own parser found a stylesheet we were not given: whatever syntax
+        // hid it from the static scan, it is reported, not silently skipped.
+        run.unstyled.add(url ?? req.url().slice(0, 2000));
+      }
       return route.abort("blockedbyclient");
     });
     const page = await context.newPage();

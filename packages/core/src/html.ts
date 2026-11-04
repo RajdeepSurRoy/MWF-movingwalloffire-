@@ -380,9 +380,24 @@ export interface ExtractedPage {
   styleOverflow: boolean;
 }
 
-// URLs a stylesheet pulls in with @import.
-export function cssImports(css: string): string[] {
-  return [...css.matchAll(/@import\s+(?:url\(\s*)?["']?([^"')\s;]+)/gi)].map((m) => m[1]!);
+// CSS escapes resolved (`@im\port`, `\40 import`), as the browser's tokenizer resolves them.
+function decodeCssEscapes(css: string): string {
+  return css.replace(/\\([0-9a-f]{1,6})[ \t\n\r\f]?|\\([^\n\r\f0-9a-f])/gi, (_m, hex: string | undefined, ch: string | undefined) => {
+    if (ch !== undefined) return ch;
+    const cp = Number.parseInt(hex!, 16);
+    return cp > 0 && cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff) ? String.fromCodePoint(cp) : "�";
+  });
+}
+const COMMENT = String.raw`/\*[\s\S]*?\*/`;
+const IMPORT = new RegExp(String.raw`@import(?:\s|${COMMENT})*(?:url\((?:\s|${COMMENT})*)?["']?([^"')\s;]+)`, "gi");
+
+// What a stylesheet pulls in with @import. `unparsed` counts @import mentions no URL could be
+// read from; the caller treats each as a stylesheet it was not given (fail closed).
+export function cssImports(css: string): { urls: string[]; unparsed: number } {
+  const text = decodeCssEscapes(css);
+  const urls = [...text.matchAll(IMPORT)].map((m) => m[1]!);
+  const mentions = text.match(/@import/gi)?.length ?? 0;
+  return { urls, unparsed: Math.max(0, mentions - urls.length) };
 }
 
 export interface PageStyleRefs {
@@ -392,6 +407,8 @@ export interface PageStyleRefs {
   stylesheets: string[];
   // The first <base href>, which relative links resolve against.
   baseHref: string | undefined;
+  // @import mentions in <style> blocks no URL could be read from.
+  unparsedImports: number;
 }
 
 // The page's own CSS and the stylesheets it links to.
@@ -420,8 +437,9 @@ export function pageStyleRefs(html: string): PageStyleRefs {
   );
   parser.write(html);
   parser.end();
-  stylesheets.push(...cssImports(css));
-  return { css, stylesheets, baseHref };
+  const imports = cssImports(css);
+  stylesheets.push(...imports.urls);
+  return { css, stylesheets, baseHref, unparsedImports: imports.unparsed };
 }
 
 // Splits an HTML page into what a human sees and what only an agent reading the source sees.

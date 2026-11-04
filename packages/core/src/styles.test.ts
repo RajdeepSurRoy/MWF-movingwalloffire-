@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { hashCanonical } from "./canonical.js";
 import { checkAction } from "./engine.js";
 import { ContextItem, type Mandate, type ProposedAction } from "./schemas.js";
 
@@ -74,6 +75,40 @@ describe("linked stylesheets", () => {
     const data = `data:text/css,${encodeURIComponent(".promo { display: none }")}`;
     expect(run(page(`<link rel="stylesheet" href="${data}">${attack}`)).decision).toBe("BLOCK");
     expect(run(page(`<link rel="alternate stylesheet" href="/dark.css"><p>AA batteries</p>`)).decision).toBe("ALLOW");
+  });
+
+  // Security review of a00836f: @import written so a regex misses it.
+  it.each([
+    ["a CSS escape in the keyword", String.raw`@im\port "/x.css";`],
+    ["a hex escape for the @", String.raw`\40 import "/x.css";`],
+    ["a comment after the keyword", `@import/**/"/x.css";`],
+    ["a comment inside url()", `@import url(/* */"/x.css");`],
+  ])("finds an @import hidden with %s", (_label, rule) => {
+    const r = run(page(`<style>${rule}</style><p>AA batteries</p>`));
+    expect(r.reasons.find((x) => x.rule_id === "CTX.STYLES_NOT_PROVIDED")?.message).toContain("https://shop-a.example/x.css");
+  });
+
+  it("fails closed on an @import it cannot read a URL from", () => {
+    expect(rules(run(page(`<style>@import ;</style><p>AA batteries</p>`)))).toContain("CTX.STYLES_NOT_PROVIDED");
+  });
+
+  it("follows @import inside a data: stylesheet", () => {
+    const data = `data:text/css,${encodeURIComponent(`@import "https://shop-a.example/promo.css";`)}`;
+    expect(rules(run(page(`<link rel="stylesheet" href="${data}">${attack}`)))).toContain("CTX.STYLES_NOT_PROVIDED");
+  });
+
+  it("takes the renderer's list of stylesheets it was not given", () => {
+    const item = page(`<p>AA batteries</p>`);
+    const r = checkAction({
+      mandate,
+      context: [item],
+      action,
+      now: NOW,
+      merchants,
+      renders: { [hashCanonical(item)]: { ok: true, viewports: ["desktop"], hidden: [], unstyled: ["https://shop-a.example/sneaky.css"] } },
+    });
+    expect(r.decision).toBe("REVIEW");
+    expect(rules(r)).toContain("CTX.STYLES_NOT_PROVIDED");
   });
 
   it("does not trust a supplied stylesheet for a different URL", () => {

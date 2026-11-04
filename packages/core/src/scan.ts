@@ -86,21 +86,34 @@ function pageStyles(item: ContextItem): { css: string; missing: string[] } {
   const css: string[] = [];
   const missing: string[] = [];
   const seen = new Set<string>();
+  const unreadable = (where: string, n: number) => {
+    if (n > 0) missing.push(`${n} @import rule(s) that could not be read, in ${where}`);
+  };
+  // A sheet's own @imports, resolved against the sheet (a data: sheet has none of its own URL).
+  const follow = (content: string, from: string, where: string) => {
+    css.push(content);
+    const imports = cssImports(content);
+    unreadable(where, imports.unparsed);
+    for (const imp of imports.urls) visit(imp, from);
+  };
   const visit = (href: string, from: string) => {
     if (/^\s*data:/i.test(href)) {
+      if (seen.has(href)) return;
+      seen.add(href);
       const inline = dataCss(href);
       if (inline === null) missing.push("data: stylesheet that could not be decoded");
-      else css.push(inline);
+      else follow(inline, from, "a data: stylesheet");
       return;
     }
     const url = resolveUrl(href, from);
-    if (!url || seen.has(url)) return;
+    if (!url) return void missing.push(`stylesheet with an unusable URL: ${href.slice(0, 100)}`);
+    if (seen.has(url)) return;
     seen.add(url);
     const content = supplied.get(url);
     if (content === undefined) return void missing.push(url);
-    css.push(content);
-    for (const imp of cssImports(content)) visit(imp, url);
+    follow(content, url, url);
   };
+  unreadable("the page's <style> blocks", page.unparsedImports);
   for (const href of page.stylesheets) visit(href, base);
   return { css: css.join("\n"), missing };
 }
@@ -145,6 +158,9 @@ export function scanContextItem(item: ContextItem, bundle: RuleBundle, render?: 
     // A successful render applied all of it with the real cascade, so it covers this.
     push({ rule_id: "CTX.STYLE_UNANALYSABLE", severity: "soft", item_id: item.id, channel: "hidden", excerpt: "page CSS exceeds analysis limits" });
   }
+  // The browser's own list of stylesheets it was not given: catches any syntax the static
+  // discovery above does not understand.
+  for (const url of render?.ok ? (render.unstyled ?? []) : []) if (!styles.missing.includes(url)) styles.missing.push(url);
   if (styles.missing.length > 0) {
     // Hiding can live in CSS we were not given, so what a person sees is unknown.
     const more = styles.missing.length > 1 ? ` and ${styles.missing.length - 1} more` : "";

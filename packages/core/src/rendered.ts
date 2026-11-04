@@ -14,11 +14,18 @@ export const RenderedText = z.strictObject({
 export type RenderedText = z.infer<typeof RenderedText>;
 
 export const RenderReport = z.discriminatedUnion("ok", [
-  z.strictObject({ ok: z.literal(true), viewports: z.array(z.string()), hidden: z.array(RenderedText) }),
+  z.strictObject({
+    ok: z.literal(true),
+    viewports: z.array(z.string()),
+    hidden: z.array(RenderedText),
+    // Stylesheets the browser requested that the caller did not supply (so were not applied).
+    unstyled: z.array(z.string()).default([]),
+  }),
   // Render failed, timed out or the page was too large: visibility is unknown.
   z.strictObject({ ok: z.literal(false), error: z.string() }),
 ]);
-export type RenderReport = z.infer<typeof RenderReport>;
+// Input type: `unstyled` may be left out (stored reports from before it existed).
+export type RenderReport = z.input<typeof RenderReport>;
 
 // Reports are looked up by the canonical hash of the context item they describe.
 export type RenderReports = Record<string, RenderReport>;
