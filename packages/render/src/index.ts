@@ -30,6 +30,16 @@ export interface RendererOptions {
   // Pages rendered at once; more wait their turn.
   concurrency?: number;
   viewports?: Viewport[];
+  // Chromium's OS sandbox, so a browser exploit in a hostile page stays contained. Turn off
+  // only where the host cannot provide it (some containers); see docs/manual-tasks.md.
+  sandbox?: boolean;
+}
+
+// One render's browser contexts. Once it is finished, a context created late (after a
+// timeout) is closed at once instead of running on outside the concurrency limit.
+interface Run {
+  done: boolean;
+  contexts: BrowserContext[];
 }
 
 export class PageRenderer {
@@ -45,6 +55,7 @@ export class PageRenderer {
       maxTexts: opts.maxTexts ?? 20_000,
       concurrency: opts.concurrency ?? 4,
       viewports: opts.viewports ?? VIEWPORTS,
+      sandbox: opts.sandbox ?? true,
     };
   }
 
@@ -52,23 +63,27 @@ export class PageRenderer {
   async render(html: string): Promise<RenderReport> {
     if (html.length > this.#opts.maxHtmlChars) return { ok: false, error: "page too large to render" };
     await this.#acquire();
-    const contexts: BrowserContext[] = [];
+    const run: Run = { done: false, contexts: [] };
     let timer: NodeJS.Timeout | undefined;
+    let work: Promise<unknown> = Promise.resolve();
     try {
       const browser = await this.#launch();
-      const work = Promise.all(this.#opts.viewports.map((v) => this.#probe(browser, contexts, html, v)));
-      work.catch(() => {}); // after a timeout the closed contexts make it reject; nobody is waiting
+      const views = Promise.all(this.#opts.viewports.map((v) => this.#probe(browser, run, html, v)));
+      work = views.catch(() => {}); // after a timeout the closed contexts make it reject
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error(`timed out after ${this.#opts.timeoutMs} ms`)), this.#opts.timeoutMs);
       });
-      const views = await Promise.race([work, timeout]);
-      if (views.some((v) => v.truncated)) return { ok: false, error: `more than ${this.#opts.maxTexts} text nodes` };
-      return { ok: true, viewports: this.#opts.viewports.map((v) => v.name), hidden: merge(views, this.#opts.viewports) };
+      const done = await Promise.race([views, timeout]);
+      if (done.some((v) => v.truncated)) return { ok: false, error: `more than ${this.#opts.maxTexts} text nodes` };
+      return { ok: true, viewports: this.#opts.viewports.map((v) => v.name), hidden: merge(done, this.#opts.viewports) };
     } catch (err) {
       return { ok: false, error: `render failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}` };
     } finally {
       clearTimeout(timer);
-      await Promise.allSettled(contexts.map((c) => c.close()));
+      run.done = true;
+      await Promise.allSettled(run.contexts.map((c) => c.close()));
+      // Hold the slot until the abandoned work has wound down (bounded, in case the browser hangs).
+      await Promise.race([work, new Promise((resolve) => setTimeout(resolve, 2000).unref())]);
       this.#release();
     }
   }
@@ -82,11 +97,11 @@ export class PageRenderer {
   async #launch(): Promise<Browser> {
     const current = this.#browser && (await this.#browser.catch(() => undefined));
     if (current?.isConnected()) return current;
-    this.#browser = chromium.launch({ headless: true });
+    this.#browser = chromium.launch({ headless: true, chromiumSandbox: this.#opts.sandbox });
     return this.#browser;
   }
 
-  async #probe(browser: Browser, contexts: BrowserContext[], html: string, v: Viewport): Promise<ProbeResult> {
+  async #probe(browser: Browser, run: Run, html: string, v: Viewport): Promise<ProbeResult> {
     const context = await browser.newContext({
       javaScriptEnabled: false,
       offline: true,
@@ -96,7 +111,11 @@ export class PageRenderer {
       isMobile: v.mobile,
       hasTouch: v.mobile,
     });
-    contexts.push(context);
+    if (run.done) {
+      await context.close();
+      throw new Error("render already finished");
+    }
+    run.contexts.push(context);
     await context.route("**/*", (route) => route.abort("blockedbyclient"));
     const page = await context.newPage();
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: this.#opts.timeoutMs });

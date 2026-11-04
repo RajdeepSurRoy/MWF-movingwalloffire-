@@ -21,6 +21,8 @@ jobs:
       # Headless Chromium for the page-visibility tests; MWF_REQUIRE_RENDER makes them fail
       # instead of skipping if the browser is missing.
       - run: npx playwright install --with-deps --only-shell chromium
+      # Ubuntu 24.04 blocks the unprivileged user namespaces Chromium's OS sandbox needs.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - run: npm run typecheck
       - run: npm test
         env:

@@ -5,7 +5,9 @@ import { openDatabase } from "./store.js";
 const db = openDatabase(process.env.MWF_DB_PATH ?? "data/mwf.db");
 // Pages are rendered in headless Chromium unless turned off; if it cannot start, pages that
 // needed it get REVIEW (CTX.RENDER_FAILED), never a clean pass.
-const renderer = process.env.MWF_RENDER === "off" ? undefined : new PageRenderer();
+const sandbox = process.env.MWF_RENDER_SANDBOX !== "off";
+if (!sandbox) console.warn("MWF_RENDER_SANDBOX=off: Chromium runs without its OS sandbox");
+const renderer = process.env.MWF_RENDER === "off" ? undefined : new PageRenderer({ sandbox });
 const app = buildApp({ db, ...(renderer && { render: (html: string) => renderer.render(html) }) });
 const port = Number(process.env.PORT ?? 8787);
 

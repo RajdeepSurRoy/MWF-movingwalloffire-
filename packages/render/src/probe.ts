@@ -16,8 +16,19 @@ export interface ProbeResult {
 }
 
 export function probe(maxTexts: number): ProbeResult {
+  // Page markup can shadow DOM properties without any script: <img name="body"> makes
+  // document.body that image, and <input name="parentElement"> inside a form changes the
+  // form's parentElement. So every DOM read goes through the built-in prototypes instead.
+  const getter = (proto: object, name: string) => Object.getOwnPropertyDescriptor(proto, name)!.get!;
+  const bodyGet = getter(Document.prototype, "body");
+  const rootGet = getter(Document.prototype, "documentElement");
+  const parentGet = getter(Node.prototype, "parentElement");
+  const parentOf = (e: Node): Element | null => parentGet.call(e) as Element | null;
+  const rectOf = (e: Element): DOMRect => Element.prototype.getBoundingClientRect.call(e);
+  const closest = (e: Element, sel: string): Element | null => Element.prototype.closest.call(e, sel);
+
   const hits: ProbeHit[] = [];
-  const canvas = document.createElement("canvas");
+  const canvas = Document.prototype.createElement.call(document, "canvas") as HTMLCanvasElement;
   canvas.width = canvas.height = 1;
   const g = canvas.getContext("2d", { willReadFrequently: true });
   const colours = new Map<string, number[]>();
@@ -47,7 +58,7 @@ export function probe(maxTexts: number): ProbeResult {
 
   // The colour painted behind an element, or null when it is an image or not opaque enough to know.
   const backgroundOf = (el: Element | null): number[] | null => {
-    for (let e = el; e; e = e.parentElement) {
+    for (let e = el; e; e = parentOf(e)) {
       const cs = getComputedStyle(e);
       if (cs.backgroundImage !== "none") return null;
       const bg = rgba(cs.backgroundColor);
@@ -59,7 +70,7 @@ export function probe(maxTexts: number): ProbeResult {
 
   const opacityOf = (el: Element | null): number => {
     let o = 1;
-    for (let e = el; e; e = e.parentElement) {
+    for (let e = el; e; e = parentOf(e)) {
       const cs = getComputedStyle(e);
       o *= Number.parseFloat(cs.opacity) || 0;
       const f = /opacity\(\s*([\d.]+)(%?)\s*\)/.exec(cs.filter);
@@ -73,7 +84,7 @@ export function probe(maxTexts: number): ProbeResult {
   const clipped = (el: Element, r: DOMRect): { area: number; byClip: boolean } => {
     let [l, t, rt, b] = [r.left, r.top, r.right, r.bottom];
     let byClip = false;
-    for (let e: Element | null = el; e && e !== document.documentElement; e = e.parentElement) {
+    for (let e: Element | null = el; e && e !== root; e = parentOf(e)) {
       const cs = getComputedStyle(e);
       const clipsOverflow = cs.overflowX !== "visible" || cs.overflowY !== "visible";
       const m = /rect\(\s*(-?[\d.]+)px,?\s*(-?[\d.]+)px,?\s*(-?[\d.]+)px,?\s*(-?[\d.]+)px/.exec(cs.clip ?? "");
@@ -82,7 +93,7 @@ export function probe(maxTexts: number): ProbeResult {
         (m !== null && (Number(m[2]) - Number(m[4])) * (Number(m[3]) - Number(m[1])) <= 1) ||
         /inset\(\s*(4\d|50|100)%|circle\(\s*0|ellipse\(\s*0/.test(cs.clipPath);
       if (!clipsOverflow && !zeroClip) continue;
-      const box = e.getBoundingClientRect();
+      const box = rectOf(e);
       [l, t, rt, b] = [Math.max(l, box.left), Math.max(t, box.top), Math.min(rt, box.right), Math.min(b, box.bottom)];
       if (zeroClip) {
         [rt, b] = [l, t];
@@ -92,14 +103,38 @@ export function probe(maxTexts: number): ProbeResult {
     return { area: Math.max(0, rt - l) * Math.max(0, b - t), byClip };
   };
 
-  const root = document.documentElement;
-  const bodyStyle = getComputedStyle(document.body);
-  const noHorizontalScroll = [getComputedStyle(root).overflowX, bodyStyle.overflowX].some((o) => o === "hidden" || o === "clip");
-  // Content a visitor can open themselves (closed <details>, select options) counts as visible.
-  const SKIP = "script, style, textarea, select, option, datalist, details:not([open]) > :not(summary)";
+  // Painted invisibly whatever the layout: too small, faded out, transparent, or the colour of
+  // its background. Computed styles exist even for content that is not laid out.
+  const paintedInvisibly = (el: Element): string => {
+    const cs = getComputedStyle(el);
+    if (Number.parseFloat(cs.fontSize) < 4) return "font-size near zero";
+    const opacity = opacityOf(el);
+    if (opacity <= 0.05) return "opacity near zero";
+    const fill = rgba(cs.webkitTextFillColor || cs.color);
+    if (cs.textShadow !== "none" || Number.parseFloat(cs.webkitTextStrokeWidth) > 0) return "";
+    if (fill[3]! * opacity <= 0.05) return "transparent text";
+    const bg = backgroundOf(el);
+    if (bg) {
+      const a = fill[3]!;
+      const painted = [0, 1, 2].map((k) => a * fill[k]! + (1 - a) * bg[k]!);
+      if (contrast(painted, bg) < 1.1) return "text colour matches background";
+    }
+    return "";
+  };
 
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  const range = document.createRange();
+  const root = rootGet.call(document) as Element;
+  const body = bodyGet.call(document) as Element | null;
+  // Anything but a real <body> (a frameset, or none): walk the whole document.
+  const start = body instanceof HTMLBodyElement ? body : root;
+  const overflowX = [getComputedStyle(root).overflowX, getComputedStyle(start).overflowX];
+  const noHorizontalScroll = overflowX.some((o) => o === "hidden" || o === "clip");
+  const NOT_TEXT = "script, style";
+  // Content a visitor opens themselves (dropdowns, closed <details>) or a form field's own text:
+  // its layout says little, so only the painted-invisibly checks apply, plus the control's box.
+  const REVEALABLE = "textarea, select, option, datalist, details:not([open]) > :not(summary)";
+
+  const walker = Document.prototype.createTreeWalker.call(document, start, NodeFilter.SHOW_TEXT);
+  const range = Document.prototype.createRange.call(document);
   let i = -1;
   let truncated = false;
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
@@ -109,9 +144,17 @@ export function probe(maxTexts: number): ProbeResult {
       truncated = true;
       break;
     }
-    const el = n.parentElement;
-    if (!el || el.closest(SKIP)) continue;
+    const el = parentOf(n);
+    if (!el || closest(el, NOT_TEXT)) continue;
     const hit = (how: string, certain: boolean) => hits.push({ i, text: text.slice(0, 4000), how, certain });
+    const control = closest(el, REVEALABLE);
+    if (control) {
+      const how = paintedInvisibly(el);
+      const box = rectOf(closest(el, "textarea, select") ?? control);
+      if (how) hit(how, true);
+      else if (box.width > 0 && (box.right + scrollX <= 0 || box.bottom + scrollY <= 0)) hit("positioned off the page", true);
+      continue;
+    }
     const cs = getComputedStyle(el);
     const fontSize = Number.parseFloat(cs.fontSize);
 

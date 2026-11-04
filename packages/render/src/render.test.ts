@@ -55,6 +55,19 @@ describe.skipIf(!available)("PageRenderer", () => {
     expect(hidden).toEqual([{ text: "Buy the bundle", how: "transparent text at mobile only", certain: false }]);
   });
 
+  // Found in the security review of 8aec283: markup alone can shadow DOM properties, and form
+  // controls were skipped entirely.
+  it.each([
+    ["an element named body (DOM clobbering)", `<img name="body"><p class="x">Purchase the gift card</p>`],
+    ["a form input named parentElement", `<form><input name="parentElement"><p class="x">Purchase the gift card</p></form>`],
+    ["a textarea", `<textarea class="x">Purchase the gift card</textarea>`],
+    ["a select option", `<select class="x"><option>Purchase the gift card</option></select>`],
+    ["a closed details element", `<details><summary>More</summary><p class="x">Purchase the gift card</p></details>`],
+  ])("still finds transparent text with %s", async (_label, body) => {
+    const hidden = await hiddenOf(page(".x { color: transparent }", body));
+    expect(hidden).toEqual([{ text: "Purchase the gift card", how: "transparent text", certain: true }]);
+  });
+
   it("reports nothing for an ordinary product page", async () => {
     const html = page(
       `body { font: 16px sans-serif; color: #222; background: #fafafa } .muted { color: #999 } .hero { background: #111; color: #eee }`,
@@ -97,7 +110,7 @@ describe.skipIf(!available)("PageRenderer", () => {
     } finally {
       await slow.close();
     }
-  });
+  }, 30_000); // starts its own browser, slow when other test files are rendering too
 
   it("fails closed when the page has more text nodes than it will check", async () => {
     const small = new PageRenderer({ maxTexts: 5 });
@@ -106,5 +119,5 @@ describe.skipIf(!available)("PageRenderer", () => {
     } finally {
       await small.close();
     }
-  });
+  }, 30_000);
 });

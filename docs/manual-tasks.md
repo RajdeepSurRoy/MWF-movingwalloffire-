@@ -28,6 +28,6 @@ Code can't do these: they need an account, a browser login, a decision, or a per
 
 ## Later
 
-- [ ] **R — Deploy** around **Nov 9** (M6): firewall API on Railway / Render / Fly (needs a persistent disk for SQLite, and Chromium in the image: `npx playwright install --with-deps --only-shell chromium` in the build step, ~0.5 GB RAM headroom per concurrent render), shop + console on Vercel. Set env vars in each host's dashboard.
+- [ ] **R — Deploy** around **Nov 9** (M6): firewall API on Railway / Render / Fly (needs a persistent disk for SQLite, and Chromium in the image: `npx playwright install --with-deps --only-shell chromium` in the build step, ~0.5 GB RAM headroom per concurrent render). Run the API as a **non-root** user on a host that allows Chromium's OS sandbox (user namespaces); check the startup log has no `MWF_RENDER_SANDBOX=off` warning, shop + console on Vercel. Set env vars in each host's dashboard.
 - [ ] **R — Register the sandbox webhook** against the deployed URL (or a cloudflared / ngrok tunnel before that) and put its ID in `PAYPAL_WEBHOOK_ID`.
 - [ ] **J — Record the demo video** and write the submission (M11, by Nov 15).
