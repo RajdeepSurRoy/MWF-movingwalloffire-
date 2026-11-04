@@ -22,7 +22,6 @@ export interface BrowserResponse {
 
 export interface BrowserPage {
   url(): string;
-  content(): Promise<string>;
   context(): { newCDPSession(page: never): Promise<CdpSession> }; // called with this page
   on(event: "response", listener: (response: BrowserResponse) => void): unknown;
   off(event: "response", listener: (response: BrowserResponse) => void): unknown;
@@ -106,6 +105,8 @@ export function recordStylesheets(page: BrowserPage): StylesheetRecorder {
 // there a hostile script could replace cloneNode or outerHTML and hand the firewall a clean
 // page. The DOM itself is shared, so it reads only through prototype accessors, which markup
 // cannot shadow (an element named "documentElement" would shadow document.documentElement).
+// The copy goes into an inert document, which has no custom-element registry: a clone in the
+// live document would upgrade custom elements, running the page's own constructors on the copy.
 const SNAPSHOT = String.raw`(() => {
   const getter = (proto, name) => Object.getOwnPropertyDescriptor(proto, name).get;
   const setter = (proto, name) => Object.getOwnPropertyDescriptor(proto, name).set;
@@ -123,7 +124,9 @@ const SNAPSHOT = String.raw`(() => {
     } catch { return null; }
   };
   const root = call(getter(Document.prototype, "documentElement"), document);
-  const clone = call(Node.prototype.cloneNode, root, true);
+  const impl = call(getter(Document.prototype, "implementation"), document);
+  const inert = call(DOMImplementation.prototype.createHTMLDocument, impl, "");
+  const clone = call(Document.prototype.importNode, inert, root, true);
   const live = allIn(document, "style");
   const copies = allIn(clone, "style");
   if (live.length !== copies.length) throw new Error("style elements changed during the snapshot");
@@ -134,7 +137,7 @@ const SNAPSHOT = String.raw`(() => {
   });
   const adopted = Array.from(call(getter(Document.prototype, "adoptedStyleSheets"), document) || [], rulesOf).filter((t) => t);
   if (adopted.length) {
-    const style = call(Document.prototype.createElementNS, document, "http://www.w3.org/1999/xhtml", "style");
+    const style = call(Document.prototype.createElementNS, inert, "http://www.w3.org/1999/xhtml", "style");
     call(setText, style, adopted.join("\n"));
     const body = call(Element.prototype.querySelector, clone, "body");
     call(Node.prototype.appendChild, body || clone, style);
@@ -149,8 +152,17 @@ export interface CdpSession {
   detach(): Promise<void>;
 }
 
-// Chromium only (CDP). Elsewhere, or if it fails, the caller falls back to page.content(),
-// which Playwright also runs outside the page's world but which lacks script-added CSS.
+// The snapshot could not be taken, so script-added CSS is unknown. Not sent as a plain
+// serialization, which could pass a page whose hiding lives in that CSS: the page is withheld,
+// so nothing the agent derives from it can be allowed.
+export class SnapshotError extends Error {
+  constructor(cause: unknown) {
+    super("could not take an isolated snapshot of the page (Chromium is required)", { cause });
+    this.name = "SnapshotError";
+  }
+}
+
+// Chromium only (CDP).
 async function isolatedSnapshot(page: BrowserPage): Promise<string> {
   const cdp = await page.context().newCDPSession(page as never);
   try {
@@ -175,8 +187,11 @@ export interface PageItemOptions {
   trust?: ContextItem["trust"];
 }
 
+// Throws SnapshotError if the page cannot be snapshotted (fails closed).
 export async function pageContextItem(page: BrowserPage, recorder: StylesheetRecorder, opts: PageItemOptions): Promise<ContextItem> {
-  const content = await isolatedSnapshot(page).catch(() => page.content());
+  const content = await isolatedSnapshot(page).catch((e: unknown) => {
+    throw new SnapshotError(e);
+  });
   const uri = withoutFragment(page.url());
   return {
     id: opts.id,
