@@ -73,13 +73,6 @@ export function resolveUrl(href: string, base: string): string | null {
   }
 }
 
-// A stylesheet's @import targets made absolute against `base`, for serving it from another URL
-// (a redirect's source). Forms this does not rewrite still resolve against the wrong URL,
-// which the renderer then reports as a stylesheet it was not given: it fails closed.
-export function rebaseImports(css: string, base: string): string {
-  return css.replace(/(@import\s+(?:url\(\s*)?["']?)([^"')\s;]+)/gi, (_m, pre: string, href: string) => pre + (resolveUrl(href, base) ?? href));
-}
-
 // The CSS a page loads, from the stylesheets the caller supplied, and the linked ones (also
 // those @imported by supplied sheets) it did not supply. data: stylesheets carry their own CSS.
 function pageStyles(item: ContextItem): { css: string; missing: string[] } {

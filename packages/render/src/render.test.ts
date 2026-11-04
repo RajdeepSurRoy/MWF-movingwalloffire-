@@ -100,6 +100,16 @@ describe.skipIf(!available)("PageRenderer", () => {
       expect(r).toMatchObject({ ok: true, hidden: found });
     });
 
+    // Security review of 898f5c9: the redirect target's CSS is served as is, not rewritten, so
+    // an @import a regex would misread still resolves against where the sheet ended up.
+    it("follows a redirected stylesheet to where it ended up", async () => {
+      const moved = { url: "https://shop-a.example/aa/css/site.css", content: "", redirect_to: "https://cdn.example/v2/site.css" };
+      const site = { url: "https://cdn.example/v2/site.css", content: `@import/**/"promo.css";` };
+      const promo = { url: "https://cdn.example/v2/promo.css", content: ".n { font-size: calc(1px * 0) }" };
+      expect(await renderer.render(linked, { url, stylesheets: [moved, site, promo] })).toMatchObject({ ok: true, hidden: found, unstyled: [] });
+      expect(await renderer.render(linked, { url, stylesheets: [moved, site] })).toMatchObject({ ok: true, hidden: [], unstyled: [promo.url] });
+    });
+
     it("ignores CSS supplied for a URL the page does not load", async () => {
       const r = await renderer.render(linked, { url, stylesheets: [{ url: "https://elsewhere.example/css/site.css", content: ".n { font-size: 0 }" }] });
       expect(r).toMatchObject({ ok: true, hidden: [] });

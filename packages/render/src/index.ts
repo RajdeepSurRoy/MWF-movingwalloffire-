@@ -1,4 +1,4 @@
-import { type ContextItem, PAGE_BASE_FALLBACK, type RenderReport, type RenderedText, rebaseImports, resolveUrl } from "@mwf/core";
+import { type ContextItem, PAGE_BASE_FALLBACK, type RenderReport, type RenderedText, resolveUrl } from "@mwf/core";
 import { type Browser, type BrowserContext, chromium } from "playwright";
 import { type ProbeResult, probe } from "./probe.js";
 
@@ -194,9 +194,11 @@ export class PageRenderer {
   }
 }
 
-// CSS to serve by URL. A redirect's source gets its final sheet, with relative @imports made
-// absolute against the final URL: Playwright does not intercept the request after a fulfilled
-// redirect, so the redirect itself cannot be replayed.
+// CSS to serve by URL. Playwright does not intercept the request after a fulfilled redirect, so
+// a redirect's source is answered with a sheet that only imports the final URL. The browser then
+// requests that URL itself and resolves its relative @imports against it, as the agent's browser
+// did, and the cascade is the same as the sheet in place. The CSS is never rewritten: rewriting
+// it would need a parser that agrees with the browser's on every input.
 function stylesheetMap(sheets: NonNullable<PageInput["stylesheets"]>): Map<string, string> {
   const byUrl = new Map<string, { content: string; redirect: string | undefined }>();
   for (const s of sheets) {
@@ -214,10 +216,13 @@ function stylesheetMap(sheets: NonNullable<PageInput["stylesheets"]>): Map<strin
     }
     const target = byUrl.get(final);
     if (!target || target.redirect) continue; // the chain ends nowhere: leave it unanswered (reported)
-    out.set(url, final === url ? target.content : rebaseImports(target.content, final));
+    out.set(url, final === url ? target.content : `@import url(${cssString(final)});`);
   }
   return out;
 }
+
+// A CSS string token. resolveUrl output is already percent-encoded; this is belt and braces.
+const cssString = (s: string): string => `"${s.replace(/[\\"\n\r\f]/g, (c) => `\\${c.charCodeAt(0).toString(16)} `)}"`;
 
 // Text hidden in every viewport keeps its strength; hidden in only some is conditional,
 // like a Tailwind `hidden md:block` element.
