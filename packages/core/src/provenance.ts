@@ -113,7 +113,6 @@ const ZERO_WIDTH = /[​‌‍⁠﻿]/g;
 const norm = (t: string) => t.normalize("NFKC").replace(ZERO_WIDTH, "").toLowerCase().replace(/\s+/g, " ");
 const tokens = (t: string) => norm(t).match(/[\p{L}\p{N}]+/gu) ?? [];
 const STOP = new Set(["the", "and", "for", "with", "pack", "set", "pcs", "per", "from"]);
-const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // Money amounts written in text, in cents: "$500", "$19.49", "1,250.00 USD", "45 dollars".
 function amountsIn(text: string): Set<number> {
@@ -125,23 +124,42 @@ function amountsIn(text: string): Set<number> {
   return out;
 }
 
+// A flagged span made ready for matching: normalized, tokenized and its amounts parsed once,
+// however many values the action has.
+interface Prepared {
+  id: string;
+  text: string;
+  words: Set<string>;
+  amounts: Set<number>;
+}
+
+// Bounds on the matching work one action check does. Past them the check cannot vouch that
+// nothing in the cart came from flagged text, so the graph is marked truncated (REVIEW).
+export const MAX_LINKED_SPANS = 2_000;
+export const MAX_LINKED_CHARS = 200_000;
+
 interface Value {
   id: string;
   kind: "item" | "amount" | "payee";
   label: string;
-  matches: (text: string) => boolean;
+  matches: (span: Prepared) => boolean;
+}
+
+// `needle` occurs in `text` with no letter or digit right before or after it.
+function hasToken(text: string, needle: string): boolean {
+  const word = /[\p{L}\p{N}]/u;
+  for (let at = text.indexOf(needle); at !== -1; at = text.indexOf(needle, at + 1)) {
+    if (!word.test(text[at - 1] ?? "") && !word.test(text[at + needle.length] ?? "")) return true;
+  }
+  return false;
 }
 
 // An item is named in text by its SKU as a whole token, or by most of its name's words.
-function itemMatcher(sku: string, name: string): (text: string) => boolean {
-  const skuRe = sku.length >= 3 ? new RegExp(`(^|[^\\p{L}\\p{N}])${escape(norm(sku))}($|[^\\p{L}\\p{N}])`, "u") : null;
+function itemMatcher(sku: string, name: string): (span: Prepared) => boolean {
+  const skuNorm = sku.length >= 3 ? norm(sku) : null;
   const words = [...new Set(tokens(name).filter((w) => w.length >= 3 && !STOP.has(w)))];
   const need = words.length === 1 ? (words[0]!.length >= 5 ? 1 : Infinity) : Math.max(2, Math.ceil((2 * words.length) / 3));
-  return (text) => {
-    if (skuRe?.test(norm(text))) return true;
-    const have = new Set(tokens(text));
-    return words.filter((w) => have.has(w)).length >= need;
-  };
+  return (span) => (skuNorm !== null && hasToken(span.text, skuNorm)) || words.filter((w) => span.words.has(w)).length >= need;
 }
 
 function actionValues(action: ProposedAction, act: string): Value[] {
@@ -157,11 +175,11 @@ function actionValues(action: ProposedAction, act: string): Value[] {
   }));
   const cents = new Set([toCents(total), ...items.map((i) => toCents(i.unit_price))]);
   for (const c of cents) {
-    values.push({ id: `${act}/amount:${c}`, kind: "amount", label: (c / 100).toFixed(2), matches: (text) => amountsIn(text).has(c) });
+    values.push({ id: `${act}/amount:${c}`, kind: "amount", label: (c / 100).toFixed(2), matches: (span) => span.amounts.has(c) });
   }
   if (merchant.payee_email) {
     const email = normalizeEmail(merchant.payee_email);
-    values.push({ id: `${act}/payee`, kind: "payee", label: merchant.payee_email, matches: (text) => norm(text).includes(email) });
+    values.push({ id: `${act}/payee`, kind: "payee", label: merchant.payee_email, matches: (span) => span.text.includes(email) });
   }
   return values;
 }
@@ -176,7 +194,7 @@ export function actionGraph({
   items: ContextItem[];
   analyses: ItemAnalysis[];
   action: ProposedAction;
-}): Graph {
+}): Graph & { truncated: boolean } {
   const { nodes, edges } = contextGraph(items, analyses);
   const act = actionId(action);
   nodes.push({ id: act, type: "action", attrs: { type: action.type, hash: hashCanonical(action), derived_from: action.derived_from } });
@@ -185,18 +203,31 @@ export function actionGraph({
   items.forEach((item) => {
     if (claimed.has(item.id)) edges.push({ src: sourceId(item), dst: act, type: "derived_from" });
   });
+
+  // Only flagged spans can start a path, so only they are matched: hard ones first, so a cap
+  // drops soft ones before hard ones. Matching uses the full text; nodes keep an excerpt.
+  const flagged = items.flatMap((item, k) =>
+    (analyses[k]?.spans ?? []).filter((sp) => sp.signal).map((sp) => ({ id: `${sourceId(item)}#${sp.index}`, span: sp })),
+  );
+  flagged.sort((a, b) => (a.span.signal === b.span.signal ? 0 : a.span.signal === "hard" ? -1 : 1));
+  const prepared: Prepared[] = [];
+  let chars = 0;
+  let truncated = false;
+  for (const { id, span } of flagged) {
+    if (prepared.length >= MAX_LINKED_SPANS || chars + span.text.length > MAX_LINKED_CHARS) {
+      truncated = true;
+      break;
+    }
+    chars += span.text.length;
+    const text = norm(span.text);
+    prepared.push({ id, text, words: new Set(tokens(text)), amounts: amountsIn(text) });
+  }
   for (const v of actionValues(action, act)) {
     nodes.push({ id: v.id, type: "value", attrs: { kind: v.kind, label: v.label } });
     edges.push({ src: v.id, dst: act, type: "proposed" });
-    // Only flagged spans can start a path, so only they are matched (which also bounds the
-    // work on a session with many pages). Matching uses the full text; nodes keep an excerpt.
-    items.forEach((item, k) => {
-      for (const span of analyses[k]?.spans ?? []) {
-        if (span.signal && v.matches(span.text)) edges.push({ src: `${sourceId(item)}#${span.index}`, dst: v.id, type: "influenced" });
-      }
-    });
+    for (const sp of prepared) if (v.matches(sp)) edges.push({ src: sp.id, dst: v.id, type: "influenced" });
   }
-  return { nodes, edges };
+  return { nodes, edges, truncated };
 }
 
 // ---------------------------------------------------------------------------

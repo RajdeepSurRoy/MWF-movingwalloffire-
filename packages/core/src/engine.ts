@@ -15,7 +15,7 @@ import {
 } from "./schemas.js";
 
 // Version of the decision logic itself (this file). The rule bundle has its own version.
-export const POLICY_VERSION = "1.0.0";
+export const POLICY_VERSION = "1.1.0"; // 1.1: provenance graph, cross-element matching
 
 export interface EngineResult extends DecisionResult {
   // Context findings behind the decision, and how much they add to the session risk score.
@@ -193,6 +193,9 @@ export function checkAction(input: ActionCheckInput, bundle = getDefaultBundle()
   // whatever the agent declares in derived_from, which a compromised agent can leave out.
   const graph = actionGraph({ mandate, items: input.context, analyses, action });
   const paths = taintPaths(graph, actionId(action));
+  if (graph.truncated) {
+    review.push(reason("PROV.GRAPH_TRUNCATED", "Too much flagged text in the session to check where the action's values came from"));
+  }
   const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
   for (const p of paths) {
     if (p.via !== "value") continue;
