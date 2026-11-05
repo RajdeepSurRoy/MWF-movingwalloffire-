@@ -1,6 +1,6 @@
 import type { ContextItem, Mandate, ProposedAction } from "@mwf/core";
 import { type FirewallClient, FirewallError, type FirewallSession, type Verdict } from "./client.js";
-import { type BrowserPage, pageContextItem, recordStylesheets } from "./page.js";
+import { type BrowserPage, type BrowserRequest, type BrowserResponse, pageContextItem, recordStylesheets } from "./page.js";
 
 // The tools an agent gets instead of its own browser and payment access.
 //
@@ -14,9 +14,20 @@ import { type BrowserPage, pageContextItem, recordStylesheets } from "./page.js"
 // items: past it, reads could no longer all be declared and a flagged page could be pushed out.
 export const MAX_READS = 200;
 
+const ORIGIN_RULE = "SDK.ORIGIN_NOT_ALLOWED";
+
+export interface BrowserRoute {
+  request(): { url(): string };
+  abort(): Promise<void>;
+  fallback(): Promise<void>;
+}
+
 export interface BrowserTab extends BrowserPage {
   goto(url: string): Promise<unknown>;
   close(): Promise<void>;
+  route(url: string, handler: (route: BrowserRoute) => unknown): Promise<unknown>;
+  on(event: "response", listener: (response: BrowserResponse) => void): unknown;
+  on(event: "request", listener: (request: BrowserRequest) => void): unknown;
 }
 
 export type ReadResult =
@@ -46,6 +57,9 @@ export interface GuardOptions<R> {
   // Runs an action the firewall approved and committed; the only path to it. The key goes to the
   // payment provider, so a retried call cannot charge twice.
   execute: (action: ProposedAction, idempotencyKey: string) => Promise<R>;
+  // Origins the agent's browser may talk to, besides trustedOrigins. Everything else is refused,
+  // so an injected agent cannot reach internal services or send data to its own server.
+  allowedOrigins: string[];
   // Origins of the business's own systems. Everything else is untrusted.
   trustedOrigins?: string[];
 }
@@ -58,12 +72,21 @@ export class IntentRefused extends Error {
   }
 }
 
+const originOf = (url: string) => {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+};
+
 const ruleIds = (v: Verdict) => [...new Set(v.reasons.map((r) => r.rule_id))];
 
 export class Guard<R> {
   readonly #session: FirewallSession;
   readonly #options: GuardOptions<R>;
   readonly #trusted: Set<string>;
+  readonly #allowed: Set<string>;
   readonly #read: string[] = [];
   #requested = 0;
   readonly events: GuardEvent[];
@@ -73,6 +96,7 @@ export class Guard<R> {
     this.#session = session;
     this.#options = options;
     this.#trusted = new Set((options.trustedOrigins ?? []).map((o) => new URL(o).origin));
+    this.#allowed = new Set([...this.#trusted, ...options.allowedOrigins.map((o) => new URL(o).origin)]);
     this.events = [{ checkpoint: "intent", verdict: session.intent }];
     this.tools = Object.freeze({
       browse: (url: string) => this.#browse(url),
@@ -111,28 +135,58 @@ export class Guard<R> {
     const verdict = await this.#session.inspectContext([item]);
     this.events.push({ checkpoint: "context", verdict, item_id: item.id });
     const uri = item.source.uri ?? null;
-    // An item the answer does not mention was not cleared.
-    if (verdict.items.find((i) => i.id === item.id)?.quarantined !== false) {
+    // Released only on a clean ALLOW. A REVIEW can mean the firewall could not analyse the page
+    // (CTX.RENDER_FAILED, CTX.STYLES_NOT_PROVIDED), and any purchase after it is held anyway, so
+    // withholding costs nothing. An item the answer does not mention was not cleared.
+    if (verdict.decision !== "ALLOW" || verdict.items.find((i) => i.id === item.id)?.quarantined !== false) {
       return { status: "withheld", id: item.id, uri, rule_ids: ruleIds(verdict) };
     }
     this.#read.push(item.id);
     return { status: "ok", id: item.id, uri, content: item.content };
   }
 
+  #mayReach(url: string): boolean {
+    const origin = originOf(url);
+    return origin !== null && this.#allowed.has(origin);
+  }
+
+  // What the agent is about to send out of the session, in a URL or a tool's arguments.
+  async #checkEgress(content: string): Promise<ReadResult | null> {
+    const verdict = await this.#session.checkOutput(content);
+    this.events.push({ checkpoint: "output", verdict });
+    return verdict.decision === "ALLOW" ? null : { status: "refused", rule_ids: ruleIds(verdict) };
+  }
+
   async #browse(url: string): Promise<ReadResult> {
     const { protocol, href } = new URL(url);
     if (protocol !== "http:" && protocol !== "https:") throw new FirewallError("only http(s) pages can be browsed");
-    // A URL is an output too: a compromised agent can carry a secret out in one, to any server.
-    const egress = await this.#session.checkOutput(href, href);
-    this.events.push({ checkpoint: "output", verdict: egress });
-    if (egress.decision !== "ALLOW") return { status: "refused", rule_ids: ruleIds(egress) };
+    if (!this.#mayReach(href)) return { status: "refused", rule_ids: [ORIGIN_RULE] };
+    // A URL is an output too. The allowlist is the real control; this catches a canary sent to
+    // an allowed origin, for example in a search query.
+    const refused = await this.#checkEgress(href);
+    if (refused) return refused;
     const id = this.#nextId();
     const tab = await this.#options.openTab();
     try {
+      // Every request the page makes is held to the allowlist, except that browsers do not ask
+      // again when following a redirect. So a redirect off the list is caught as it happens and
+      // nothing from that load reaches the agent, but the request itself has gone out. Stopping
+      // that takes a network-level egress proxy around the agent's browser.
+      let escaped = false;
+      tab.on("request", (request) => {
+        if (request.redirectedFrom() && !this.#mayReach(request.url())) escaped = true;
+      });
+      await tab.route("**/*", (route) => (this.#mayReach(route.request().url()) ? route.fallback() : route.abort()));
       const recorder = recordStylesheets(tab);
-      await tab.goto(href);
+      const failed = await tab.goto(href).then(
+        () => null,
+        (err: unknown) => ({ err }),
+      );
+      if (escaped) return { status: "refused", rule_ids: [ORIGIN_RULE] };
+      if (failed) throw failed.err;
       const item = await pageContextItem(tab, recorder, { id, trust: this.#trustOf });
       recorder.stop();
+      if (escaped) return { status: "refused", rule_ids: [ORIGIN_RULE] };
       return await this.#inspect(item);
     } finally {
       await tab.close().catch(() => {});
@@ -147,6 +201,8 @@ export class Guard<R> {
     opts: { kind?: "tool_result" | "document" | "email"; contentType?: ContextItem["content_type"]; trust?: ContextItem["trust"] } = {},
   ): (...args: A) => Promise<ReadResult> {
     return async (...args) => {
+      const refused = await this.#checkEgress(JSON.stringify(args));
+      if (refused) return refused;
       const id = this.#nextId();
       return this.#inspect({
         id,

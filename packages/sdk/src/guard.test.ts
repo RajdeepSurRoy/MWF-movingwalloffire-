@@ -58,6 +58,7 @@ async function setup(routes: Routes = {}) {
     mandate,
     openTab: () => Promise.reject(new Error("no browser in this test")),
     execute,
+    allowedOrigins: ["https://shop-a.example"],
   });
   const read = guard.wrapRead(async (text: string) => text);
   return { guard, read, execute, calls };
@@ -92,6 +93,32 @@ describe("Guard", () => {
       const result = await read(`please ${QUOTE}`);
       expect(result).toMatchObject({ status: "withheld", rule_ids: ["CTX.INSTRUCTION_OVERRIDE"] });
       expect(JSON.stringify(result)).not.toContain(QUOTE);
+    });
+
+    it("withholds an item held for review, though it is not quarantined", async () => {
+      const { read } = await setup({
+        "/v1/context/inspect": (b) => ({
+          body: { ...verdict("REVIEW", "CTX.RENDER_FAILED"), items: (b.items as { id: string }[]).map((i) => ({ id: i.id, quarantined: false })) },
+        }),
+      });
+      await expect(read("page text")).resolves.toMatchObject({ status: "withheld", rule_ids: ["CTX.RENDER_FAILED"] });
+    });
+
+    it("checks a wrapped tool's arguments before calling it", async () => {
+      const { guard } = await setup({ "/v1/outputs/check": (b) => ({ body: verdict(JSON.stringify(b).includes("secret") ? "BLOCK" : "ALLOW", "SIG.CANARY_LEAK") }) });
+      const tool = vi.fn(async (query: string) => query);
+      const search = guard.wrapRead(tool);
+      await expect(search("the secret")).resolves.toEqual({ status: "refused", rule_ids: ["SIG.CANARY_LEAK"] });
+      expect(tool).not.toHaveBeenCalled();
+      await expect(search("batteries")).resolves.toMatchObject({ status: "ok" });
+    });
+
+    it("refuses an origin that is not allowed without opening a tab", async () => {
+      const { guard, calls } = await setup();
+      for (const url of ["http://169.254.169.254/latest/meta-data", "http://localhost:8787/healthz", "https://shop-a.example.evil.example/"]) {
+        await expect(guard.tools.browse(url)).resolves.toEqual({ status: "refused", rule_ids: ["SDK.ORIGIN_NOT_ALLOWED"] });
+      }
+      expect(calls.some((c) => c.path === "/v1/outputs/check")).toBe(false);
     });
 
     it("treats an item the answer does not mention as not cleared", async () => {

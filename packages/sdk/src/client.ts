@@ -130,7 +130,7 @@ export class FirewallSession {
     return this.#client.post("/v1/actions/commit", { session_id: this.id, action_token: approval.token, action: executed }, Verdict);
   }
 
-  checkOutput(content: string, destination?: string): Promise<Verdict> {
-    return this.#client.post("/v1/outputs/check", { session_id: this.id, output: { content, ...(destination && { destination }) } }, Verdict);
+  checkOutput(content: string): Promise<Verdict> {
+    return this.#client.post("/v1/outputs/check", { session_id: this.id, output: { content } }, Verdict);
   }
 }

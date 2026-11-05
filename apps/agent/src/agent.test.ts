@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { type BrowserTab, Guard } from "@mwf/sdk";
 import { type Browser, chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -123,6 +125,7 @@ describe.skipIf(!available)("shopping agent", { timeout: 60_000 }, () => {
           mandate: mandate(),
           openTab: () => context.newPage() as Promise<BrowserTab>,
           execute: fakePayments().execute,
+          allowedOrigins: ["https://evil.example", ...(url.startsWith("http") ? [new URL(url).origin] : [])],
           trustedOrigins,
         });
         return await guard.tools.browse(leak ? leak(guard.canary) : url);
@@ -150,6 +153,55 @@ describe.skipIf(!available)("shopping agent", { timeout: 60_000 }, () => {
       await expect(read("file:///etc/passwd", [])).rejects.toThrow("only http(s)");
     });
 
+    it("gives the agent nothing from a redirect off the allowlist", async () => {
+      const internal = createServer((_req, res) => res.end("internal secret"));
+      await new Promise<void>((done) => internal.listen(0, "127.0.0.1", done));
+      const shop = createServer((_req, res) => {
+        res.writeHead(302, { location: `http://127.0.0.1:${(internal.address() as AddressInfo).port}/admin` }).end();
+      });
+      await new Promise<void>((done) => shop.listen(0, "127.0.0.1", done));
+      const origin = `http://127.0.0.1:${(shop.address() as AddressInfo).port}`;
+      const context = await browser.newContext();
+      try {
+        const guard = await Guard.start({
+          firewall: firewall.client,
+          prompt: TASK,
+          mandate: mandate(),
+          openTab: () => context.newPage() as Promise<BrowserTab>,
+          execute: fakePayments().execute,
+          allowedOrigins: [origin],
+        });
+        await expect(guard.tools.browse(`${origin}/go`)).resolves.toEqual({ status: "refused", rule_ids: ["SDK.ORIGIN_NOT_ALLOWED"] });
+      } finally {
+        await context.close();
+        shop.close();
+        internal.close();
+      }
+    });
+
+    it("blocks a page's own request to an origin off the allowlist", async () => {
+      const hits: string[] = [];
+      const context = await browser.newContext();
+      await context.route("**/*", (route) => {
+        hits.push(route.request().url());
+        return route.fulfill({ contentType: "text/html", body: `<!doctype html><img src="https://collector.example/x.png"><h1>AA batteries</h1>` });
+      });
+      try {
+        const guard = await Guard.start({
+          firewall: firewall.client,
+          prompt: TASK,
+          mandate: mandate(),
+          openTab: () => context.newPage() as Promise<BrowserTab>,
+          execute: fakePayments().execute,
+          allowedOrigins: ["https://shop-a.example"],
+        });
+        await expect(guard.tools.browse("https://shop-a.example/x")).resolves.toMatchObject({ status: "ok" });
+        expect(hits).toEqual(["https://shop-a.example/x"]);
+      } finally {
+        await context.close();
+      }
+    });
+
     it("blocks an action that carries the canary", async () => {
       const { execute, orders } = fakePayments();
       const guard = await Guard.start({
@@ -158,6 +210,7 @@ describe.skipIf(!available)("shopping agent", { timeout: 60_000 }, () => {
         mandate: mandate(),
         openTab: () => Promise.reject(new Error("unused")),
         execute,
+        allowedOrigins: [],
       });
       const input = (batteries as { call: { input: Parameters<typeof purchaseArgs>[0] } }).call.input;
       const args = purchaseArgs({ ...input, merchant: { ...input.merchant, name: guard.canary } });

@@ -15,7 +15,7 @@ import {
 } from "./schemas.js";
 
 // Version of the decision logic itself (this file). The rule bundle has its own version.
-export const POLICY_VERSION = "1.1.0"; // 1.1: provenance graph, cross-element matching
+export const POLICY_VERSION = "1.2.0"; // 1.1: provenance graph, cross-element matching. 1.2: encoded canaries
 
 export interface EngineResult extends DecisionResult {
   // Context findings behind the decision, and how much they add to the session risk score.
@@ -171,7 +171,7 @@ export function checkAction(input: ActionCheckInput, bundle = getDefaultBundle()
   // Canary leak: the agent's hidden prompt reached an action argument.
   const args = canonicalize(action.args);
   for (const canary of input.canaries ?? []) {
-    if (canary && args.includes(canary)) block.push(reason("SIG.CANARY_LEAK", "A session canary token appears in the action"));
+    if (canary && leaksCanary(args, canary)) block.push(reason("SIG.CANARY_LEAK", "A session canary token appears in the action"));
   }
 
   // Context signals. Hard signatures in content the action relied on are a BLOCK; elsewhere in
@@ -242,6 +242,19 @@ export function checkCommit(input: CommitCheckInput): EngineResult {
 // ---------------------------------------------------------------------------
 // Checkpoint 5 — output check: leaks and exfiltration.
 
+// The canary as written, in any case, percent-encoded up to three times, or as whole-string hex
+// or base64. Best effort: anything that re-encodes it differently still passes, which is why the
+// SDK limits where an agent can send data at all.
+export function leaksCanary(content: string, canary: string): boolean {
+  let text = content;
+  for (let i = 0; i < 3; i++) text = text.replace(/%([0-9a-f]{2})/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+  const bytes = new TextEncoder().encode(canary);
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  const base64 = btoa(String.fromCharCode(...bytes)).replace(/=+$/, "");
+  const lower = text.toLowerCase();
+  return [canary.toLowerCase(), hex].some((f) => lower.includes(f)) || [base64, base64.replace(/\+/g, "-").replace(/\//g, "_")].some((f) => text.includes(f));
+}
+
 function luhn(digits: string): boolean {
   let sum = 0;
   for (let i = 0; i < digits.length; i++) {
@@ -256,7 +269,7 @@ export function checkOutput({ content, canaries = [] }: { content: string; canar
   const block: Reason[] = [];
   const review: Reason[] = [];
   for (const canary of canaries) {
-    if (canary && content.includes(canary)) block.push(reason("SIG.CANARY_LEAK", "A session canary token appears in the output"));
+    if (canary && leaksCanary(content, canary)) block.push(reason("SIG.CANARY_LEAK", "A session canary token appears in the output"));
   }
   for (const rule of bundle.output_rules) {
     if (regex(bundle, rule.pattern, "u").test(content)) {

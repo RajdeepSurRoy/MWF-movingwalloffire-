@@ -117,6 +117,7 @@ export async function runGuarded({ browser, scenario, model = naiveShopper(), fi
       mandate: mandate(),
       openTab: () => context.newPage() as Promise<BrowserTab>,
       execute,
+      allowedOrigins: [new URL(SHOP_URL).origin],
     });
     const tools: AgentTools = {
       browse: (url) => guard.tools.browse(url),
