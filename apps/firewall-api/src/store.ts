@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { type Graph, type GraphNode, MAX_PATH_EDGES, PATH_EDGES, type TaintPath, selectPaths } from "@mwf/core";
 
 // Databases created before a column existed get it added on open.
 function addColumnIfMissing(db: DatabaseSync, table: string, column: string, definition: string) {
@@ -82,6 +83,29 @@ export function openDatabase(path: string): DatabaseSync {
       committed_at TEXT
     );
 
+    -- The session's provenance graph (architecture §6). Append-only, like context_log: a node
+    -- or edge, once recorded, stays.
+    CREATE TABLE IF NOT EXISTS graph_nodes (
+      session_id TEXT NOT NULL REFERENCES sessions (id),
+      id         TEXT NOT NULL,
+      type       TEXT NOT NULL,
+      trust      TEXT,
+      attrs      TEXT NOT NULL,
+      PRIMARY KEY (session_id, id)
+    );
+    CREATE TABLE IF NOT EXISTS graph_edges (
+      session_id TEXT NOT NULL REFERENCES sessions (id),
+      src        TEXT NOT NULL,
+      dst        TEXT NOT NULL,
+      type       TEXT NOT NULL,
+      PRIMARY KEY (session_id, src, dst, type)
+    );
+    CREATE INDEX IF NOT EXISTS graph_edges_dst ON graph_edges (session_id, dst);
+    CREATE TRIGGER IF NOT EXISTS graph_nodes_no_update BEFORE UPDATE ON graph_nodes
+      BEGIN SELECT RAISE(ABORT, 'graph_nodes is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS graph_edges_no_update BEFORE UPDATE ON graph_edges
+      BEGIN SELECT RAISE(ABORT, 'graph_edges is append-only'); END;
+
     -- Index of ledger decisions, so feedback can be checked against the caller's tenant.
     CREATE TABLE IF NOT EXISTS decisions (
       id         TEXT PRIMARY KEY,
@@ -107,4 +131,65 @@ export function upsertMerchant(db: DatabaseSync, tenantId: string, merchant: { i
     "INSERT INTO merchants (tenant_id, merchant_id, name, payee_emails) VALUES (?, ?, ?, ?) " +
       "ON CONFLICT (tenant_id, merchant_id) DO UPDATE SET name = excluded.name, payee_emails = excluded.payee_emails",
   ).run(tenantId, merchant.id, merchant.name, JSON.stringify(merchant.payee_emails));
+}
+
+export function saveGraph(db: DatabaseSync, sessionId: string, graph: Graph) {
+  const node = db.prepare("INSERT OR IGNORE INTO graph_nodes (session_id, id, type, trust, attrs) VALUES (?, ?, ?, ?, ?)");
+  const edge = db.prepare("INSERT OR IGNORE INTO graph_edges (session_id, src, dst, type) VALUES (?, ?, ?, ?)");
+  db.exec("BEGIN");
+  try {
+    for (const n of graph.nodes) node.run(sessionId, n.id, n.type, n.trust ?? null, JSON.stringify(n.attrs));
+    for (const e of graph.edges) edge.run(sessionId, e.src, e.dst, e.type);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+export function loadGraph(db: DatabaseSync, sessionId: string): Graph {
+  const nodes = (db.prepare("SELECT id, type, trust, attrs FROM graph_nodes WHERE session_id = ?").all(sessionId) as {
+    id: string;
+    type: GraphNode["type"];
+    trust: GraphNode["trust"] | null;
+    attrs: string;
+  }[]).map((r) => ({ id: r.id, type: r.type, ...(r.trust && { trust: r.trust }), attrs: JSON.parse(r.attrs) as Record<string, unknown> }));
+  const edges = db.prepare("SELECT src, dst, type FROM graph_edges WHERE session_id = ?").all(sessionId) as unknown as Graph["edges"];
+  return { nodes, edges };
+}
+
+// The path query over the stored graph, as a recursive CTE: every simple path of at most
+// MAX_PATH_EDGES edges from a node carrying a signal to `target`. selectPaths then keeps one
+// per origin, exactly as taintPaths does in memory. CROSS JOIN fixes the join order so each
+// step looks edges up by (session_id, src); left to the planner it scanned the session's edges
+// for every row (22 ms instead of under 1 ms on a demo-size session).
+export function queryTaintPaths(db: DatabaseSync, sessionId: string, target: string): TaintPath[] {
+  const edgeTypes = PATH_EDGES.map(() => "?").join(", ");
+  const rows = db
+    .prepare(
+      `WITH RECURSIVE walk (node, path, depth) AS (
+         SELECT id, json_array(id), 0 FROM graph_nodes
+          WHERE session_id = ? AND type IN ('source', 'span') AND json_extract(attrs, '$.signal') IN ('hard', 'soft')
+         UNION ALL
+         SELECT e.dst, json_insert(w.path, '$[#]', e.dst), w.depth + 1
+           FROM walk w CROSS JOIN graph_edges e ON e.session_id = ? AND e.src = w.node
+          WHERE w.depth < ? AND w.node <> ? AND e.type IN (${edgeTypes})
+            AND NOT EXISTS (SELECT 1 FROM json_each(w.path) WHERE json_each.value = e.dst)
+       )
+       SELECT path FROM walk WHERE node = ?`,
+    )
+    .all(sessionId, sessionId, MAX_PATH_EDGES, target, ...PATH_EDGES, target) as { path: string }[];
+  const candidates = rows.map((r) => JSON.parse(r.path) as string[]);
+  // Only the nodes on candidate paths are needed to rank them.
+  const ids = [...new Set(candidates.flat())];
+  const nodes = ids.length
+    ? (db
+        .prepare(`SELECT id, type, attrs FROM graph_nodes WHERE session_id = ? AND id IN (SELECT value FROM json_each(?))`)
+        .all(sessionId, JSON.stringify(ids)) as { id: string; type: GraphNode["type"]; attrs: string }[]).map((r) => ({
+        id: r.id,
+        type: r.type,
+        attrs: JSON.parse(r.attrs) as Record<string, unknown>,
+      }))
+    : [];
+  return selectPaths(candidates, { nodes, edges: [] });
 }

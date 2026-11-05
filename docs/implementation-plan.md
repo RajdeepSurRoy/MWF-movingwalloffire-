@@ -90,7 +90,10 @@
 4. **Legitimate pages** with normal marketing language ("best seller", "add to cart") to keep false-positive tests honest.
    - *Done when:* every scenario can be rendered and exported as a fixture for the harness.
 
-## M4 — Provenance graph (Nov 5–7)
+## M4 — Provenance graph (Nov 5–7) — done 2026-11-05
+
+*As built:* `packages/core/src/provenance.ts` builds the graph and runs the path query in memory, so the harness and the API decide the same way. The API stores the graph in `graph_nodes` / `graph_edges` and runs the same query as a recursive CTE (`queryTaintPaths`), with a test that the two give the same path. Paths start only at sources and spans with a rule finding: shop pages are untrusted, so "any untrusted node" would hold every purchase. Flagged text that names an item (SKU, or most of its name), a price or the payee gives `PROV.TAINTED_VALUE`, even when the agent omits the page from `derived_from`. Measured on a demo-size session (20 pages, 500 flagged spans): under 1 ms in SQL. Agent-step nodes wait for the SDK (M5) to record what the agent read before each proposal. With `derived_from` emptied, 11 of 16 hidden-text attacks name nothing in the cart ("the premium version") and drop from BLOCK to REVIEW; recording reads in the SDK closes that.
+
 
 1. **Tables:** `nodes(id, session_id, type, trust, attrs)` and `edges(src, dst, type)` in SQLite.
 2. **Graph building:** checkpoint 1 adds intent and mandate nodes; checkpoint 2 adds source and span nodes with trust tags and findings; checkpoint 3 adds agent-step, proposed-value and action nodes with `derived_from` / `influenced` edges.

@@ -41,6 +41,8 @@ Every payment the agent proposes goes through the firewall before money moves.
 
 Fetched page content is also scanned deterministically for injection artifacts: hidden CSS text, zero-width characters, HTML comments, instruction-like phrases ("ignore previous…"), and fake compliance notices.
 
+**Provenance graph.** Each session keeps a graph of where the action's values came from: the user's intent, the mandate, every page and the spans of it a person can't see or that a rule flagged, the cart's items, prices and payee, and the action. A path from flagged text to the action is the attack's explanation, and is returned as `graph_path` and stored with the decision. If flagged text names an item, price or payee in the cart, that is `PROV.TAINTED_VALUE`: BLOCK for a hard signal, REVIEW for a soft one. This applies even when the agent leaves the page out of `derived_from`. Ordinary product listings never start a path, since shop pages are untrusted too.
+
 **Three possible decisions:**
 
 - 🟢 **ALLOW** — all required checks pass → capture the payment.

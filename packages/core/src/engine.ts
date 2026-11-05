@@ -3,7 +3,8 @@ import { type MerchantRecord, lookalikeOf, normalizeEmail, sameId } from "./merc
 import { formatCents, toCents } from "./money.js";
 import { type RuleBundle, getDefaultBundle, regex } from "./rules.js";
 import type { RenderReports } from "./rendered.js";
-import { type Finding, scanContext, scanText } from "./scan.js";
+import { type Graph, actionGraph, actionId, contextGraph, taintPaths } from "./provenance.js";
+import { type Finding, analyzeContext, scanText } from "./scan.js";
 import {
   type ContextItem,
   type DecisionResult,
@@ -20,6 +21,10 @@ export interface EngineResult extends DecisionResult {
   // Context findings behind the decision, and how much they add to the session risk score.
   findings: Finding[];
   risk: number;
+  // The provenance graph this checkpoint built, and the path behind the decision (node ids,
+  // from the attack point to the action), when there is one.
+  graph?: Graph;
+  path?: string[];
 }
 
 const reason = (rule_id: string, message: string, ref?: string): Reason =>
@@ -65,11 +70,13 @@ export function checkContext(
   bundle = getDefaultBundle(),
   renders?: RenderReports,
 ): EngineResult & { quarantined: string[] } {
-  const findings = scanContext(items, bundle, renders);
+  const analyses = analyzeContext(items, bundle, renders);
+  const findings = analyses.flatMap((a) => a.findings);
   const hard = findings.filter((f) => f.severity === "hard");
   const soft = findings.filter((f) => f.severity === "soft");
   const quarantined = [...new Set(hard.map((f) => f.item_id))];
-  return { ...combine(hard.map(findingReason), soft.map(findingReason), findings, findingRisk(findings, bundle)), quarantined };
+  const result = combine(hard.map(findingReason), soft.map(findingReason), findings, findingRisk(findings, bundle));
+  return { ...result, quarantined, graph: contextGraph(items, analyses) };
 }
 
 // ---------------------------------------------------------------------------
@@ -167,9 +174,10 @@ export function checkAction(input: ActionCheckInput, bundle = getDefaultBundle()
     if (canary && args.includes(canary)) block.push(reason("SIG.CANARY_LEAK", "A session canary token appears in the action"));
   }
 
-  // Context signals. Hard signatures in content the action relied on are a BLOCK;
-  // elsewhere in the session they are a REVIEW until the provenance graph (M4) can prove a path.
-  const findings = scanContext(input.context, bundle, input.renders);
+  // Context signals. Hard signatures in content the action relied on are a BLOCK; elsewhere in
+  // the session a REVIEW, unless the provenance graph links them to a value in the action.
+  const analyses = analyzeContext(input.context, bundle, input.renders);
+  const findings = analyses.flatMap((a) => a.findings);
   const onPath = new Set(action.derived_from);
   for (const f of findings) {
     if (f.severity === "hard") (onPath.has(f.item_id) ? block : review).push(findingReason(f));
@@ -181,12 +189,28 @@ export function checkAction(input: ActionCheckInput, bundle = getDefaultBundle()
     else review.push(reason("CTX.QUARANTINED_IN_SESSION", "The session contains quarantined content", id));
   }
 
+  // Provenance: an item, price or payee in the action that appears in flagged text. This holds
+  // whatever the agent declares in derived_from, which a compromised agent can leave out.
+  const graph = actionGraph({ mandate, items: input.context, analyses, action });
+  const paths = taintPaths(graph, actionId(action));
+  const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
+  for (const p of paths) {
+    if (p.via !== "value") continue;
+    const span = nodes.get(p.nodes[0]!)?.attrs;
+    const value = nodes.get(p.nodes[1]!)?.attrs;
+    const what = `${String(value?.kind)} "${String(value?.label)}"`;
+    const where = `${String(span?.channel)} text in ${String(span?.item_id)}: "${String(span?.text).slice(0, 80)}"`;
+    (p.signal === "hard" ? block : review).push(reason("PROV.TAINTED_VALUE", `The action's ${what} comes from ${p.signal}-flagged ${where}`, String(span?.item_id)));
+  }
+
   const risk = findingRisk(findings, bundle);
   const total = (input.priorRisk ?? 0) + risk;
   if (block.length === 0 && review.length === 0 && total >= bundle.risk.review_threshold) {
     review.push(reason("RISK.SESSION_SCORE", `Session risk ${total} is at or above ${bundle.risk.review_threshold}`));
   }
-  return combine(block, review, findings, risk);
+  const result = combine(block, review, findings, risk);
+  const path = result.decision === "ALLOW" ? undefined : paths[0]?.nodes;
+  return { ...result, graph, ...(path && { path }) };
 }
 
 // ---------------------------------------------------------------------------

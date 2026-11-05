@@ -23,9 +23,10 @@ import {
   checkOutput,
   getDefaultBundle,
   hashCanonical,
+  intentGraph,
 } from "@mwf/core";
 import { authenticate } from "./auth.js";
-import { openDatabase } from "./store.js";
+import { openDatabase, saveGraph } from "./store.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -171,7 +172,7 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
       rule_bundle_version: bundle.version,
       model_hashes: {},
       action_hash: actionHash,
-      graph_path: [],
+      graph_path: result.path ?? [],
       created_at: new Date().toISOString(),
     };
     ledger.append("decision", rec);
@@ -190,6 +191,7 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     decision_id: rec.id,
     decision: rec.decision,
     reasons: rec.reasons,
+    ...(rec.graph_path.length > 0 && { graph_path: rec.graph_path }),
     rule_bundle_version: rec.rule_bundle_version,
   });
 
@@ -204,6 +206,7 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     db.prepare(
       "INSERT INTO sessions (id, tenant_id, prompt, mandate, mandate_hash, created_at, expires_at, canary, risk_score) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ).run(id, tenantId, body.prompt, JSON.stringify(body.mandate), mandateHash, new Date().toISOString(), body.mandate.expires_at, canary, result.risk);
+    saveGraph(db, id, intentGraph(body.prompt, body.mandate));
     const rec = record(tenantId, "intent", id, result);
     return reply.code(201).send({ session_id: id, mandate_hash: mandateHash, canary, ...respond(rec) });
   });
@@ -225,6 +228,7 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
       const report = renders[hash];
       insert.run(body.session_id, item.id, item.trust, hash, JSON.stringify(item), quarantined.has(item.id) ? 1 : 0, now, report ? JSON.stringify(report) : null);
     }
+    if (result.graph) saveGraph(db, body.session_id, result.graph);
     const rec = record(tenantId, "context", body.session_id, result);
     return { ...respond(rec), items: body.items.map((i) => ({ id: i.id, quarantined: quarantined.has(i.id) })) };
   });
@@ -251,6 +255,7 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
       bundle,
     );
     addRisk(body.session_id, result);
+    if (result.graph) saveGraph(db, body.session_id, result.graph);
     const rec = record(tenantId, "action", body.session_id, result, actionHash);
     if (result.decision !== "ALLOW") return { ...respond(rec), action_hash: actionHash, action_token: null };
 

@@ -135,10 +135,50 @@ function renderedSegments(render: RenderReport & { ok: true }): Segment[] {
   return render.hidden.map((h) => ({ channel: h.certain ? "hidden" : "conditional", text: h.text, how: `rendered: ${h.how}` }));
 }
 
+// A piece of an item's text the provenance graph tracks: text a person does not see, or any
+// text with a rule finding of its own. Visible text without findings is left out: product
+// listings are untrusted too, and would link every purchase to "untrusted content".
+export interface Span {
+  index: number;
+  channel: Channel | "text";
+  how: string;
+  text: string;
+  // The strongest rule finding on this span alone; null when it is only hidden.
+  signal: "hard" | "soft" | null;
+  rule_ids: string[];
+}
+
+export interface ItemAnalysis {
+  findings: Finding[];
+  spans: Span[];
+}
+
+// Most spans one item contributes to the graph; flagged spans are kept first.
+export const MAX_SPANS_PER_ITEM = 500;
+
 // Scans one context item for injection artifacts. Pure and deterministic.
 // `render` is the headless-browser view of the page, when one was made (HTML items only).
 export function scanContextItem(item: ContextItem, bundle: RuleBundle, render?: RenderReport): Finding[] {
-  if (item.trust === "trusted") return [];
+  return analyzeContextItem(item, bundle, render).findings;
+}
+
+// Findings for each segment on its own, in channels where the joined text had any.
+function spansOf(segments: { channel: Channel | "text"; text: string; how: string }[], findings: Finding[], bundle: RuleBundle, itemId: string): Span[] {
+  const flagged = new Set(findings.filter((f) => f.severity === "hard" || f.severity === "soft").map((f) => f.channel));
+  const spans: Span[] = [];
+  segments.forEach((s, index) => {
+    if (!s.text.trim()) return;
+    const own = flagged.has(s.channel) ? matchRules(bundle, s.text, s.channel, itemId).filter((f) => f.severity === "hard" || f.severity === "soft") : [];
+    const signal = own.some((f) => f.severity === "hard") ? "hard" : own.length ? "soft" : null;
+    if (signal === null && (s.channel === "visible" || s.channel === "text")) return;
+    spans.push({ index, channel: s.channel, how: s.how, text: s.text, signal, rule_ids: [...new Set(own.map((f) => f.rule_id))] });
+  });
+  const rank = (x: Span) => (x.signal === "hard" ? 0 : x.signal === "soft" ? 1 : 2);
+  return spans.length <= MAX_SPANS_PER_ITEM ? spans : [...spans].sort((x, y) => rank(x) - rank(y) || x.index - y.index).slice(0, MAX_SPANS_PER_ITEM);
+}
+
+export function analyzeContextItem(item: ContextItem, bundle: RuleBundle, render?: RenderReport): ItemAnalysis {
+  if (item.trust === "trusted") return { findings: [], spans: [] };
   const findings: Finding[] = [];
   const push = (f: Finding) => {
     if (!findings.some((x) => x.rule_id === f.rule_id && x.channel === f.channel)) findings.push(f);
@@ -150,7 +190,7 @@ export function scanContextItem(item: ContextItem, bundle: RuleBundle, render?: 
 
   if (item.content_type !== "text/html") {
     for (const f of matchRules(bundle, item.content, "text", item.id)) push(f);
-    return findings;
+    return { findings, spans: spansOf([{ channel: "text", text: item.content, how: "" }], findings, bundle, item.id) };
   }
 
   const styles = pageStyles(item);
@@ -191,11 +231,16 @@ export function scanContextItem(item: ContextItem, bundle: RuleBundle, render?: 
   for (const [channel, texts] of byChannel) {
     for (const f of matchRules(bundle, texts.join("\n"), channel, item.id)) push(f);
   }
-  return findings;
+  const tracked = segments.map((s) => ({ ...s, text: s.channel === "visible" ? s.text : stripExemptions(s.text, bundle) }));
+  return { findings, spans: spansOf(tracked, findings, bundle, item.id) };
 }
 
 export function scanContext(items: ContextItem[], bundle: RuleBundle, renders?: RenderReports): Finding[] {
   return items.flatMap((i) => scanContextItem(i, bundle, renders?.[hashCanonical(i)]));
+}
+
+export function analyzeContext(items: ContextItem[], bundle: RuleBundle, renders?: RenderReports): ItemAnalysis[] {
+  return items.map((i) => analyzeContextItem(i, bundle, renders?.[hashCanonical(i)]));
 }
 
 // Scans free text (a user prompt, an agent output) as if a human could see all of it.
