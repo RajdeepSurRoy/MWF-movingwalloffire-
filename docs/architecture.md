@@ -383,7 +383,7 @@ One compromised rule bundle could block or allow traffic across every customer, 
 - **Policy rules (Phase 0):** versioned JSON evaluated by a small TypeScript engine; move to Cedar or OPA/Rego in Phase 1.
 
 **Open:**
-- Which model drives the shopping agent (the attack victim) and the red-team generator.
+- Which model drives the shopping agent (the attack victim) and the red-team generator. The agent runs on a deterministic stand-in until this is decided (`apps/agent/src/naive.ts`).
 - Thresholds for embedding similarity and the classifier (set from the legitimate set).
 - Corroboration threshold *k* for global rules, and how tenant trust is computed.
 - PayPal Vault spike (biggest technical risk for Phase 0).

@@ -127,6 +127,29 @@ describe.skipIf(!available)("pageContextItem", () => {
     expect(item.content).not.toContain("Nothing to see");
   });
 
+  it("decides trust from the document the snapshot read, not from a separate look at the address", async () => {
+    const real = await browser.newPage();
+    await real.goto(`${base}/shop/aa`, { waitUntil: "load" });
+    // As if the page navigated to a trusted address just after the snapshot.
+    const moved = {
+      url: () => "https://trusted.example/",
+      context: () => ({ newCDPSession: () => real.context().newCDPSession(real) }),
+      on() {},
+      off() {},
+    };
+    const seen: (string | null)[] = [];
+    const item = await pageContextItem(moved, recordStylesheets(moved), {
+      id: "page-1",
+      trust: (uri) => {
+        seen.push(uri);
+        return "untrusted";
+      },
+    });
+    await real.close();
+    expect(seen).toEqual([`${base}/shop/aa`]);
+    expect(item.source.uri).toBe(`${base}/shop/aa`);
+  });
+
   it("fails closed when the page cannot be snapshotted", async () => {
     const page = { url: () => `${base}/shop/aa`, context: () => ({ newCDPSession: () => Promise.reject(new Error("not Chromium")) }), on() {}, off() {} };
     const recorder = recordStylesheets(page);

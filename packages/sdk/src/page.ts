@@ -144,7 +144,10 @@ const SNAPSHOT = String.raw`(() => {
   }
   const dt = call(getter(Document.prototype, "doctype"), document);
   const dtName = dt ? call(getter(DocumentType.prototype, "name"), dt) : "";
-  return (dt ? "<!DOCTYPE " + dtName + ">" : "") + call(getter(Element.prototype, "outerHTML"), clone);
+  return {
+    url: call(getter(Document.prototype, "URL"), document),
+    html: (dt ? "<!DOCTYPE " + dtName + ">" : "") + call(getter(Element.prototype, "outerHTML"), clone),
+  };
 })()`;
 
 export interface CdpSession {
@@ -163,7 +166,7 @@ export class SnapshotError extends Error {
 }
 
 // Chromium only (CDP).
-async function isolatedSnapshot(page: BrowserPage): Promise<string> {
+async function isolatedSnapshot(page: BrowserPage): Promise<{ url: string; html: string }> {
   const cdp = await page.context().newCDPSession(page as never);
   try {
     const { frameTree } = (await cdp.send("Page.getFrameTree")) as { frameTree: { frame: { id: string } } };
@@ -174,8 +177,9 @@ async function isolatedSnapshot(page: BrowserPage): Promise<string> {
       result: { value?: unknown };
       exceptionDetails?: unknown;
     };
-    if (exceptionDetails || typeof result.value !== "string") throw new Error("snapshot failed");
-    return result.value;
+    const value = result.value as { url?: unknown; html?: unknown } | undefined;
+    if (exceptionDetails || typeof value?.url !== "string" || typeof value.html !== "string") throw new Error("snapshot failed");
+    return { url: value.url, html: value.html };
   } finally {
     await cdp.detach().catch(() => {});
   }
@@ -183,22 +187,24 @@ async function isolatedSnapshot(page: BrowserPage): Promise<string> {
 
 export interface PageItemOptions {
   id: string;
-  // Set by the SDK from where the page came from, never by the agent (docs/implementation-plan.md, M5).
-  trust?: ContextItem["trust"];
+  // Decides trust from the address of the document the snapshot read, never from what the agent
+  // says. That address comes from the snapshot itself: read separately, a page could navigate to
+  // a trusted address in between and have its own HTML tagged trusted. Default: untrusted.
+  trust?: (uri: string | null) => ContextItem["trust"];
 }
 
 // Throws SnapshotError if the page cannot be snapshotted (fails closed).
 export async function pageContextItem(page: BrowserPage, recorder: StylesheetRecorder, opts: PageItemOptions): Promise<ContextItem> {
-  const content = await isolatedSnapshot(page).catch((e: unknown) => {
+  const snapshot = await isolatedSnapshot(page).catch((e: unknown) => {
     throw new SnapshotError(e);
   });
-  const uri = withoutFragment(page.url());
+  const uri = withoutFragment(snapshot.url);
   return {
     id: opts.id,
     source: { kind: "web_page", ...(uri && { uri }) },
-    trust: opts.trust ?? "untrusted",
+    trust: opts.trust?.(uri) ?? "untrusted",
     content_type: "text/html",
-    content,
+    content: snapshot.html,
     resources: await recorder.stylesheets(),
   };
 }
