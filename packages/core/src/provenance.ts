@@ -133,8 +133,9 @@ interface Prepared {
   amounts: Set<number>;
 }
 
-// Bounds on the matching work one action check does. Past them the check cannot vouch that
-// nothing in the cart came from flagged text, so the graph is marked truncated (REVIEW).
+// Bounds on the matching work one action check does. Spans past them are skipped, and the
+// graph says how strong the skipped text was: unchecked hard-flagged text could be what the
+// cart came from, so it decides like a match would (BLOCK), or padding could soften a BLOCK.
 export const MAX_LINKED_SPANS = 2_000;
 export const MAX_LINKED_CHARS = 200_000;
 
@@ -194,7 +195,7 @@ export function actionGraph({
   items: ContextItem[];
   analyses: ItemAnalysis[];
   action: ProposedAction;
-}): Graph & { truncated: boolean } {
+}): Graph & { truncated: Signal | null } {
   const { nodes, edges } = contextGraph(items, analyses);
   const act = actionId(action);
   nodes.push({ id: act, type: "action", attrs: { type: action.type, hash: hashCanonical(action), derived_from: action.derived_from } });
@@ -212,11 +213,11 @@ export function actionGraph({
   flagged.sort((a, b) => (a.span.signal === b.span.signal ? 0 : a.span.signal === "hard" ? -1 : 1));
   const prepared: Prepared[] = [];
   let chars = 0;
-  let truncated = false;
+  let truncated: Signal | null = null;
   for (const { id, span } of flagged) {
     if (prepared.length >= MAX_LINKED_SPANS || chars + span.text.length > MAX_LINKED_CHARS) {
-      truncated = true;
-      break;
+      if (truncated !== "hard") truncated = span.signal; // skip this one; shorter ones may still fit
+      continue;
     }
     chars += span.text.length;
     const text = norm(span.text);

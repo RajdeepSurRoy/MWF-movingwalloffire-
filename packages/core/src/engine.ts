@@ -194,7 +194,9 @@ export function checkAction(input: ActionCheckInput, bundle = getDefaultBundle()
   const graph = actionGraph({ mandate, items: input.context, analyses, action });
   const paths = taintPaths(graph, actionId(action));
   if (graph.truncated) {
-    review.push(reason("PROV.GRAPH_TRUNCATED", "Too much flagged text in the session to check where the action's values came from"));
+    (graph.truncated === "hard" ? block : review).push(
+      reason("PROV.GRAPH_TRUNCATED", `Too much ${graph.truncated}-flagged text in the session to check where the action's values came from`),
+    );
   }
   const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
   for (const p of paths) {

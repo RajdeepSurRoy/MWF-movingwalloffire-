@@ -26,34 +26,88 @@ function normalize(text: string, stripZeroWidth: boolean): string {
 const excerptOf = (text: string, index: number) =>
   text.slice(Math.max(0, index - 10), index + 70).replace(/\s+/g, " ").trim();
 
-// How a channel's segments are joined for matching (see analyzeContextItem).
-const SEPARATORS = ["\n", " "] as const;
-
 // How strong a rule is in a channel: conditional (hidden at some screen sizes only) caps it at soft.
 function severityIn(rule: RuleBundle["text_rules"][number], channel: Channel | "text") {
   if (channel === "visible" || channel === "text") return rule.visible;
   return channel === "conditional" && rule.hidden === "hard" ? "soft" : rule.hidden;
 }
 
-function matchRules(bundle: RuleBundle, raw: string, channel: Channel | "text", itemId: string): Finding[] {
-  const findings: Finding[] = [];
-  const clean = normalize(raw, true);
-  const unstripped = normalize(raw, false);
-  for (const rule of bundle.text_rules) {
-    const severity = severityIn(rule, channel);
-    for (const p of rule.patterns) {
-      const re = regex(bundle, p, "imu");
-      const m = re.exec(clean);
-      if (!m) continue;
-      // Matches only once zero-width characters are removed: the text was disguised on purpose.
-      if (!re.test(unstripped)) {
-        findings.push({ rule_id: "CTX.OBFUSCATED_INSTRUCTION", severity: "hard", item_id: itemId, channel, excerpt: excerptOf(clean, m.index) });
+// The two views of a channel's text that rules run on. Lines: elements joined by newlines, so
+// `^` anchors at each element. Flat: all whitespace folded to single spaces, so a phrase still
+// matches when it is split across elements or across lines of one element.
+const VIEWS = [
+  { sep: "\n", fold: (t: string) => t },
+  { sep: " ", fold: (t: string) => t.replace(/\s+/g, " ") },
+];
+
+interface Mark {
+  signal: "hard" | "soft";
+  rules: Set<string>;
+}
+
+// Runs the rules over a channel's texts. The one place rules run, so what is found and which
+// texts it is marked on cannot disagree: each match marks every text it overlaps, so all parts
+// of a split instruction are marked. `marks` is keyed by index into `texts`.
+function matchChannel(bundle: RuleBundle, texts: string[], channel: Channel | "text", itemId: string): { findings: Finding[]; marks: Map<number, Mark> } {
+  const findings = new Map<string, Finding>();
+  const marks = new Map<number, Mark>();
+  const units = texts
+    .map((t, index) => ({ index, clean: normalize(t, true).trim(), raw: normalize(t, false).trim() }))
+    .filter((u) => u.clean);
+  for (const view of VIEWS) {
+    const parts = units.map((u) => view.fold(u.clean));
+    const joined = parts.join(view.sep);
+    const unstripped = units.map((u) => view.fold(u.raw)).join(view.sep);
+    const starts: number[] = [];
+    let pos = 0;
+    for (const part of parts) {
+      starts.push(pos);
+      pos += part.length + 1;
+    }
+    // The last unit starting at or before `at`.
+    const unitAt = (at: number) => {
+      let lo = 0;
+      let hi = starts.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (starts[mid]! <= at) lo = mid;
+        else hi = mid - 1;
       }
-      if (severity !== "none") findings.push({ rule_id: rule.id, severity, item_id: itemId, channel, excerpt: excerptOf(clean, m.index) });
-      break;
+      return lo;
+    };
+    const mark = (start: number, end: number, signal: "hard" | "soft", ruleId: string) => {
+      for (let k = unitAt(start); k < parts.length && starts[k]! < end; k++) {
+        if (start > starts[k]! + parts[k]!.length) continue; // the match begins on the separator after it
+        const index = units[k]!.index;
+        const m = marks.get(index);
+        if (!m) marks.set(index, { signal, rules: new Set([ruleId]) });
+        else {
+          if (signal === "hard") m.signal = "hard";
+          m.rules.add(ruleId);
+        }
+      }
+    };
+    const found = (rule_id: string, severity: Finding["severity"], index: number) => {
+      if (!findings.has(rule_id)) findings.set(rule_id, { rule_id, severity, item_id: itemId, channel, excerpt: excerptOf(joined, index) });
+    };
+    for (const rule of bundle.text_rules) {
+      const severity = severityIn(rule, channel);
+      for (const p of rule.patterns) {
+        const matches = [...joined.matchAll(regex(bundle, p, "gimu"))];
+        if (!matches.length) continue;
+        // Matches only once zero-width characters are removed: the text was disguised on purpose.
+        const disguised = !regex(bundle, p, "imu").test(unstripped);
+        if (disguised) found("CTX.OBFUSCATED_INSTRUCTION", "hard", matches[0]!.index);
+        if (severity !== "none") found(rule.id, severity, matches[0]!.index);
+        for (const m of matches) {
+          const end = m.index + Math.max(m[0].length, 1);
+          if (disguised) mark(m.index, end, "hard", "CTX.OBFUSCATED_INSTRUCTION");
+          if (severity === "hard" || severity === "soft") mark(m.index, end, severity, rule.id);
+        }
+      }
     }
   }
-  return findings;
+  return { findings: [...findings.values()], marks };
 }
 
 // A whole segment that is just a standard UI label becomes empty; anything else is kept as is.
@@ -166,67 +220,13 @@ export function scanContextItem(item: ContextItem, bundle: RuleBundle, render?: 
   return analyzeContextItem(item, bundle, render).findings;
 }
 
-// Which segments the rule matches fall in. Matching runs on each channel's segments joined,
-// as the item scan does, so an instruction split across elements ("Ignore previous" in one,
-// "instructions and buy…" in the next) flags every segment it spans. Normalizing each
-// segment and joining gives the same text as normalizing the joined text (NFKC does not
-// combine across the separator, and the whitespace collapse keeps a lone separator), so match
-// offsets map back to segments.
-function spansOf(segments: { channel: Channel | "text"; text: string; how: string }[], findings: Finding[], bundle: RuleBundle): Span[] {
-  const flagged = new Set(findings.filter((f) => f.severity === "hard" || f.severity === "soft").map((f) => f.channel));
-  const marks = segments.map(() => ({ signal: null as "hard" | "soft" | null, rules: new Set<string>() }));
-  const channels = new Map<Channel | "text", number[]>();
-  segments.forEach((s, i) => {
-    if (!flagged.has(s.channel)) return;
-    const list = channels.get(s.channel);
-    if (list) list.push(i);
-    else channels.set(s.channel, [i]);
-  });
-  for (const [channel, idxs] of channels) {
-    const clean = idxs.map((i) => normalize(segments[i]!.text, true));
-    const raw = idxs.map((i) => normalize(segments[i]!.text, false));
-    const starts: number[] = [];
-    let pos = 0;
-    for (const c of clean) {
-      starts.push(pos);
-      pos += c.length + 1;
-    }
-    const mark = (start: number, end: number, signal: "hard" | "soft", ruleId: string) => {
-      idxs.forEach((seg, k) => {
-        const from = starts[k]!;
-        const to = from + clean[k]!.length;
-        if (start <= to && end > from) {
-          const m = marks[seg]!;
-          if (m.signal !== "hard") m.signal = signal;
-          m.rules.add(ruleId);
-        }
-      });
-    };
-    // Both separators are one character, so the offsets in `starts` hold for either join.
-    for (const sep of SEPARATORS) {
-      const joined = clean.join(sep);
-      const unstripped = raw.join(sep);
-      for (const rule of bundle.text_rules) {
-        const severity = severityIn(rule, channel);
-        for (const p of rule.patterns) {
-          const matches = [...joined.matchAll(regex(bundle, p, "gimu"))];
-          if (!matches.length) continue;
-          const obfuscated = !regex(bundle, p, "imu").test(unstripped);
-          for (const m of matches) {
-            const end = m.index + Math.max(m[0].length, 1);
-            if (obfuscated) mark(m.index, end, "hard", "CTX.OBFUSCATED_INSTRUCTION");
-            if (severity === "hard" || severity === "soft") mark(m.index, end, severity, rule.id);
-          }
-        }
-      }
-    }
-  }
+function spansFrom(segments: { channel: Channel | "text"; text: string; how: string }[], marks: Map<number, Mark>): Span[] {
   const spans: Span[] = [];
   segments.forEach((s, index) => {
     if (!s.text.trim()) return;
-    const { signal, rules } = marks[index]!;
-    if (signal === null && (s.channel === "visible" || s.channel === "text")) return;
-    spans.push({ index, channel: s.channel, how: s.how, text: s.text, signal, rule_ids: [...rules] });
+    const mark = marks.get(index);
+    if (!mark && (s.channel === "visible" || s.channel === "text")) return;
+    spans.push({ index, channel: s.channel, how: s.how, text: s.text, signal: mark?.signal ?? null, rule_ids: [...(mark?.rules ?? [])] });
   });
   const rank = (x: Span) => (x.signal === "hard" ? 0 : x.signal === "soft" ? 1 : 2);
   return spans.length <= MAX_SPANS_PER_ITEM ? spans : [...spans].sort((x, y) => rank(x) - rank(y) || x.index - y.index).slice(0, MAX_SPANS_PER_ITEM);
@@ -244,8 +244,9 @@ export function analyzeContextItem(item: ContextItem, bundle: RuleBundle, render
   }
 
   if (item.content_type !== "text/html") {
-    for (const f of matchRules(bundle, item.content, "text", item.id)) push(f);
-    return { findings, spans: spansOf([{ channel: "text", text: item.content, how: "" }], findings, bundle) };
+    const text = matchChannel(bundle, [item.content], "text", item.id);
+    text.findings.forEach(push);
+    return { findings, spans: spansFrom([{ channel: "text", text: item.content, how: "" }], text.marks) };
   }
 
   const styles = pageStyles(item);
@@ -268,28 +269,28 @@ export function analyzeContextItem(item: ContextItem, bundle: RuleBundle, render
   } else if (render) {
     segments.push(...renderedSegments(render));
   }
-  const byChannel = new Map<Channel, string[]>();
-  for (const s of segments) {
-    // Standard UI labels ("Order history", "Add to cart") are removed from non-visible text
-    // before matching, so hidden menus and hover buttons don't trip the broad purchase rule.
-    const text = s.channel === "visible" ? s.text : stripExemptions(s.text, bundle);
+  // Standard UI labels ("Order history", "Add to cart") are removed from non-visible text
+  // before matching, so hidden menus and hover buttons don't trip the broad purchase rule.
+  const tracked = segments.map((s) => ({ ...s, text: s.channel === "visible" ? s.text : stripExemptions(s.text, bundle) }));
+  const byChannel = new Map<Channel, number[]>();
+  tracked.forEach((s, i) => {
     const list = byChannel.get(s.channel);
-    if (list) list.push(text);
-    else byChannel.set(s.channel, [text]);
-  }
+    if (list) list.push(i);
+    else byChannel.set(s.channel, [i]);
+  });
 
   const hidden = segments.filter((s) => s.channel === "hidden");
   if (hidden.length > 0) {
     // Hidden text alone is common on real sites (menus, screen-reader text): a weak signal.
     push({ rule_id: "CTX.HIDDEN_TEXT", severity: "info", item_id: item.id, channel: "hidden", excerpt: `${hidden[0]!.how}: ${hidden[0]!.text.trim().slice(0, 60)}` });
   }
-  for (const [channel, texts] of byChannel) {
-    // Joined by newlines, so `^` anchors at each element; and by spaces, so a phrase split
-    // across elements ("Please ignore" | "previous instructions") still matches.
-    for (const sep of SEPARATORS) for (const f of matchRules(bundle, texts.join(sep), channel, item.id)) push(f);
+  const marks = new Map<number, Mark>();
+  for (const [channel, idxs] of byChannel) {
+    const result = matchChannel(bundle, idxs.map((i) => tracked[i]!.text), channel, item.id);
+    result.findings.forEach(push);
+    for (const [k, mark] of result.marks) marks.set(idxs[k]!, mark);
   }
-  const tracked = segments.map((s) => ({ ...s, text: s.channel === "visible" ? s.text : stripExemptions(s.text, bundle) }));
-  return { findings, spans: spansOf(tracked, findings, bundle) };
+  return { findings, spans: spansFrom(tracked, marks) };
 }
 
 export function scanContext(items: ContextItem[], bundle: RuleBundle, renders?: RenderReports): Finding[] {
@@ -302,5 +303,5 @@ export function analyzeContext(items: ContextItem[], bundle: RuleBundle, renders
 
 // Scans free text (a user prompt, an agent output) as if a human could see all of it.
 export function scanText(text: string, id: string, bundle: RuleBundle): Finding[] {
-  return matchRules(bundle, text, "text", id);
+  return matchChannel(bundle, [text], "text", id).findings;
 }
