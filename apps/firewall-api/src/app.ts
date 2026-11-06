@@ -12,6 +12,7 @@ import {
   Mandate,
   type MerchantRecord,
   POLICY_VERSION,
+  PaymentArgs,
   ProposedAction,
   RenderReport,
   type RenderReports,
@@ -24,6 +25,7 @@ import {
   getDefaultBundle,
   hashCanonical,
   intentGraph,
+  toCents,
 } from "@mwf/core";
 import { authenticate } from "./auth.js";
 import { openDatabase, saveGraph } from "./store.js";
@@ -44,6 +46,7 @@ const CommitActionBody = z.strictObject({
   action_token: z.string().min(1).max(200),
   action: ProposedAction,
 });
+const ReleaseActionBody = z.strictObject({ session_id: SessionId, action_token: z.string().min(1).max(200) });
 const CheckOutputBody = z.strictObject({
   session_id: SessionId,
   output: z.strictObject({ content: z.string().max(500_000), destination: z.string().max(2000).optional() }),
@@ -140,12 +143,30 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
   }
 
   function loadMerchants(tenantId: string): MerchantRecord[] {
-    const rows = db.prepare("SELECT merchant_id, name, payee_emails FROM merchants WHERE tenant_id = ?").all(tenantId) as {
+    const rows = db.prepare("SELECT merchant_id, name, payee_emails, checkout_origins FROM merchants WHERE tenant_id = ?").all(tenantId) as {
       merchant_id: string;
       name: string;
       payee_emails: string;
+      checkout_origins: string;
     }[];
-    return rows.map((r) => ({ id: r.merchant_id, name: r.name, payee_emails: JSON.parse(r.payee_emails) as string[] }));
+    return rows.map((r) => ({
+      id: r.merchant_id,
+      name: r.name,
+      payee_emails: JSON.parse(r.payee_emails) as string[],
+      checkout_origins: JSON.parse(r.checkout_origins) as string[],
+    }));
+  }
+
+  // What the session has committed, plus what live tokens could still commit. An earlier token
+  // for this same action does not count: issuing a new one retires it.
+  function spentCents(sessionId: string, actionHash: string, now: string): number {
+    const row = db
+      .prepare(
+        "SELECT COALESCE(SUM(amount_cents), 0) AS spent FROM action_tokens " +
+          "WHERE session_id = ? AND (committed_at IS NOT NULL OR (expires_at > ? AND action_hash <> ?))",
+      )
+      .get(sessionId, now, actionHash) as { spent: number };
+    return row.spent;
   }
 
   // Session risk accumulates across calls, so a slow multi-turn attack still crosses the threshold.
@@ -250,6 +271,7 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
         now: new Date(),
         merchants: loadMerchants(tenantId),
         canaries: session.canaries,
+        spentCents: spentCents(body.session_id, actionHash, new Date().toISOString()),
         priorRisk: session.risk,
       },
       bundle,
@@ -262,9 +284,16 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     const token = secret("mwf_at_");
     const idempotencyKey = randomUUID();
     const expiresAt = new Date(Date.now() + bundle.action_token_ttl_seconds * 1000).toISOString();
+    const payment = PaymentArgs.safeParse(body.action.args);
+    // One live token per action: two for the same action could both be committed.
+    db.prepare("UPDATE action_tokens SET expires_at = ? WHERE session_id = ? AND action_hash = ? AND committed_at IS NULL").run(
+      rec.created_at,
+      body.session_id,
+      actionHash,
+    );
     db.prepare(
-      "INSERT INTO action_tokens (token_hash, session_id, action_hash, created_at, expires_at, idempotency_key) VALUES (?, ?, ?, ?, ?, ?)",
-    ).run(hashCanonical(token), body.session_id, actionHash, rec.created_at, expiresAt, idempotencyKey);
+      "INSERT INTO action_tokens (token_hash, session_id, action_hash, created_at, expires_at, idempotency_key, amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(hashCanonical(token), body.session_id, actionHash, rec.created_at, expiresAt, idempotencyKey, payment.success ? toCents(payment.data.total) : 0);
     // Use idempotency_key as PayPal-Request-Id so a retried capture cannot charge twice.
     return { ...respond(rec), action_hash: actionHash, action_token: token, idempotency_key: idempotencyKey, expires_at: expiresAt };
   });
@@ -297,6 +326,17 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     addRisk(body.session_id, result);
     const rec = record(tenantId, "commit", body.session_id, result, hashCanonical(body.action));
     return { ...respond(rec), action_hash: rec.action_hash };
+  });
+
+  // The user declined, or the agent replaced the action: the token dies and its money is free again.
+  v1.post("/actions/release", async (req) => {
+    const tenantId = tenantOf(req);
+    const body = ReleaseActionBody.parse(req.body);
+    loadSession(tenantId, body.session_id);
+    const released = db
+      .prepare("UPDATE action_tokens SET expires_at = ? WHERE token_hash = ? AND session_id = ? AND committed_at IS NULL")
+      .run(new Date().toISOString(), hashCanonical(body.action_token), body.session_id).changes;
+    return { released: released > 0 };
   });
 
   // Checkpoint 5 — output check.

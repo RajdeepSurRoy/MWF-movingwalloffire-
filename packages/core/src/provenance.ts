@@ -167,14 +167,14 @@ function actionValues(action: ProposedAction, act: string): Value[] {
   if (!action.type.startsWith("payment.")) return [];
   const parsed = PaymentArgs.safeParse(action.args);
   if (!parsed.success) return [];
-  const { items, total, merchant } = parsed.data;
+  const { items, fees = [], total, merchant } = parsed.data;
   const values: Value[] = items.map((item, i) => ({
     id: `${act}/item:${i}`,
     kind: "item",
     label: item.name,
     matches: itemMatcher(item.sku, item.name),
   }));
-  const cents = new Set([toCents(total), ...items.map((i) => toCents(i.unit_price))]);
+  const cents = new Set([toCents(total), ...items.map((i) => toCents(i.unit_price)), ...fees.map((f) => toCents(f.amount))]);
   for (const c of cents) {
     values.push({ id: `${act}/amount:${c}`, kind: "amount", label: (c / 100).toFixed(2), matches: (span) => span.amounts.has(c) });
   }

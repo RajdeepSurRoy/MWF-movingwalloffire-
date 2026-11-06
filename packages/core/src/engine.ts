@@ -1,5 +1,5 @@
 import { canonicalize, hashCanonical } from "./canonical.js";
-import { type MerchantRecord, lookalikeOf, normalizeEmail, sameId } from "./merchant.js";
+import { type MerchantRecord, lookalikeOf, normalizeEmail, originOf, sameId } from "./merchant.js";
 import { formatCents, toCents } from "./money.js";
 import { type RuleBundle, getDefaultBundle, regex } from "./rules.js";
 import type { RenderReports } from "./rendered.js";
@@ -15,7 +15,9 @@ import {
 } from "./schemas.js";
 
 // Version of the decision logic itself (this file). The rule bundle has its own version.
-export const POLICY_VERSION = "1.2.0"; // 1.1: provenance graph, cross-element matching. 1.2: encoded canaries
+// 1.1: provenance graph, cross-element matching. 1.2: encoded canaries.
+// 1.3: several categories, fees, checkout origin, session spending.
+export const POLICY_VERSION = "1.3.0";
 
 export interface EngineResult extends DecisionResult {
   // Context findings behind the decision, and how much they add to the session risk score.
@@ -91,6 +93,8 @@ export interface ActionCheckInput {
   merchants: MerchantRecord[];
   // Canary tokens planted in this session's agent prompt. Seeing one in an action means a leak.
   canaries?: string[];
+  // Cents this session has already spent or reserved. max_total covers all of it.
+  spentCents?: number;
   // Risk carried over from earlier decisions in the session.
   priorRisk?: number;
   // Context item ids quarantined at checkpoint 2. Sticky: a later rule bundle cannot un-quarantine them.
@@ -106,25 +110,34 @@ function checkPayment(input: ActionCheckInput, bundle: RuleBundle, block: Reason
     block.push(reason("POL.ARGS_INVALID", `payment arguments do not match the schema: ${parsed.error.issues[0]?.message ?? "invalid"}`));
     return;
   }
-  const { merchant, items, total } = parsed.data;
+  const { merchant, items, fees = [], total } = parsed.data;
   const currency = mandate.max_total.currency;
 
   // Spending policy.
-  const moneys = [total, ...items.map((i) => i.unit_price)];
+  const moneys = [total, ...items.map((i) => i.unit_price), ...fees.map((f) => f.amount), ...(mandate.max_fee ? [mandate.max_fee] : [])];
   if (moneys.some((m) => m.currency !== currency)) {
     block.push(reason("POL.CURRENCY_MISMATCH", `All amounts must be in ${currency}`));
     return;
   }
-  const sum = items.reduce((s, i) => s + toCents(i.unit_price) * i.quantity, 0);
+  const feeSum = fees.reduce((s, f) => s + toCents(f.amount), 0);
+  const sum = items.reduce((s, i) => s + toCents(i.unit_price) * i.quantity, feeSum);
   if (sum !== toCents(total)) {
-    block.push(reason("POL.TOTAL_MISMATCH", `Line items add up to ${formatCents(sum, currency)}, total says ${formatCents(toCents(total), currency)}`));
+    block.push(reason("POL.TOTAL_MISMATCH", `Line items and fees add up to ${formatCents(sum, currency)}, total says ${formatCents(toCents(total), currency)}`));
   }
+  // Without this cap, a "mandatory" add-on could ride along as a fee, outside every item rule.
+  if (feeSum > (mandate.max_fee ? toCents(mandate.max_fee) : 0)) {
+    block.push(reason("POL.FEE_OVER_CAP", `Fees of ${formatCents(feeSum, currency)} exceed what the mandate allows`));
+  }
+  const spent = input.spentCents ?? 0;
   if (toCents(total) > toCents(mandate.max_total)) {
     block.push(reason("POL.OVER_BUDGET", `Total ${formatCents(toCents(total), currency)} exceeds the mandate's ${formatCents(toCents(mandate.max_total), currency)}`));
+  } else if (spent + toCents(total) > toCents(mandate.max_total)) {
+    block.push(reason("POL.SESSION_BUDGET", `This session has already spent or reserved ${formatCents(spent, currency)} of ${formatCents(toCents(mandate.max_total), currency)}`));
   }
+  const categories = mandate.categories ?? [mandate.category];
   for (const item of items) {
-    if (item.category !== mandate.category) {
-      block.push(reason("POL.CATEGORY", `"${item.name}" is ${item.category}; the user asked for ${mandate.category}`, item.sku));
+    if (!categories.includes(item.category)) {
+      block.push(reason("POL.CATEGORY", `"${item.name}" is ${item.category}; the user asked for ${categories.join(", ")}`, item.sku));
     }
     if (mandate.per_item_max && toCents(item.unit_price) > toCents(mandate.per_item_max)) {
       block.push(reason("POL.ITEM_OVER_CAP", `"${item.name}" costs more than the per-item cap`, item.sku));
@@ -142,14 +155,25 @@ function checkPayment(input: ActionCheckInput, bundle: RuleBundle, block: Reason
     return;
   }
 
-  // Payee: money must go where the business's registry says this merchant is paid.
+  // Payee: money must go where the business's registry says this merchant is paid. A third-party
+  // agent often cannot see a payee address, so the checkout's origin can verify it instead. Either
+  // one that is present must match.
   const record = merchants.find((m) => sameId(m.id, merchant.id));
   if (!record) {
     review.push(reason("MER.PAYEE_UNVERIFIED", `No registry entry for "${merchant.id}"; payee cannot be verified`, merchant.id));
-  } else if (!merchant.payee_email) {
-    review.push(reason("MER.PAYEE_UNVERIFIED", "The action does not name a payee", merchant.id));
-  } else if (!record.payee_emails.map(normalizeEmail).includes(normalizeEmail(merchant.payee_email))) {
-    block.push(reason("MER.PAYEE_MISMATCH", `Payee ${merchant.payee_email} is not a registered payee of "${merchant.id}"`, merchant.id));
+    return;
+  }
+  const origin = merchant.checkout_origin ? originOf(merchant.checkout_origin) : null;
+  const originMatches = origin !== null && (record.checkout_origins ?? []).some((o) => originOf(o) === origin);
+  if (merchant.checkout_origin && !originMatches) {
+    block.push(reason("MER.ORIGIN_MISMATCH", `Checkout at ${merchant.checkout_origin} is not a registered checkout of "${merchant.id}"`, merchant.id));
+  }
+  if (merchant.payee_email) {
+    if (!record.payee_emails.map(normalizeEmail).includes(normalizeEmail(merchant.payee_email))) {
+      block.push(reason("MER.PAYEE_MISMATCH", `Payee ${merchant.payee_email} is not a registered payee of "${merchant.id}"`, merchant.id));
+    }
+  } else if (!merchant.checkout_origin) {
+    review.push(reason("MER.PAYEE_UNVERIFIED", "The action names neither a payee nor a checkout origin", merchant.id));
   }
 }
 

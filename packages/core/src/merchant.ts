@@ -4,6 +4,8 @@ export interface MerchantRecord {
   id: string;
   name: string;
   payee_emails: string[];
+  // Origins of the merchant's real checkout, e.g. https://shop.example.
+  checkout_origins?: string[];
 }
 
 // Characters attackers swap in for ASCII lookalikes (Cyrillic, Greek, digits, dashes).
@@ -50,6 +52,15 @@ export function lookalikeOf(id: string, allowlist: string[], maxDistance: number
       editDistance(sk, ask) <= maxDistance
     );
   });
+}
+
+// The origin of a URL, or null if it is not one.
+export function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
 }
 
 export const normalizeEmail = (e: string) => e.normalize("NFC").trim().toLowerCase();

@@ -123,14 +123,21 @@ export function openDatabase(path: string): DatabaseSync {
   addColumnIfMissing(db, "action_tokens", "idempotency_key", "TEXT NOT NULL DEFAULT ''");
   // Headless-browser view of an HTML item (RenderReport JSON); NULL when it was not rendered.
   addColumnIfMissing(db, "context_log", "render", "TEXT");
+  addColumnIfMissing(db, "merchants", "checkout_origins", "TEXT NOT NULL DEFAULT '[]'");
+  // What the token would spend, so a session's purchases can be held to its mandate together.
+  addColumnIfMissing(db, "action_tokens", "amount_cents", "INTEGER NOT NULL DEFAULT 0");
   return db;
 }
 
-export function upsertMerchant(db: DatabaseSync, tenantId: string, merchant: { id: string; name: string; payee_emails: string[] }) {
+export function upsertMerchant(
+  db: DatabaseSync,
+  tenantId: string,
+  merchant: { id: string; name: string; payee_emails: string[]; checkout_origins?: string[] },
+) {
   db.prepare(
-    "INSERT INTO merchants (tenant_id, merchant_id, name, payee_emails) VALUES (?, ?, ?, ?) " +
-      "ON CONFLICT (tenant_id, merchant_id) DO UPDATE SET name = excluded.name, payee_emails = excluded.payee_emails",
-  ).run(tenantId, merchant.id, merchant.name, JSON.stringify(merchant.payee_emails));
+    "INSERT INTO merchants (tenant_id, merchant_id, name, payee_emails, checkout_origins) VALUES (?, ?, ?, ?, ?) " +
+      "ON CONFLICT (tenant_id, merchant_id) DO UPDATE SET name = excluded.name, payee_emails = excluded.payee_emails, checkout_origins = excluded.checkout_origins",
+  ).run(tenantId, merchant.id, merchant.name, JSON.stringify(merchant.payee_emails), JSON.stringify(merchant.checkout_origins ?? []));
 }
 
 export function saveGraph(db: DatabaseSync, sessionId: string, graph: Graph) {

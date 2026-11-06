@@ -13,8 +13,13 @@ export const DecisionValue = z.enum(["ALLOW", "BLOCK", "REVIEW"]);
 export const Mandate = z.strictObject({
   intent_text: z.string().min(1).max(2000),
   category: z.string().min(1).max(100),
+  // Set when one order may span several categories, as a grocery basket does. Replaces `category`.
+  categories: z.array(z.string().min(1).max(100)).min(1).max(50).optional(),
+  // For the whole session, not per order: several purchases share it.
   max_total: Money,
   per_item_max: Money.optional(),
+  // The most the merchant may add on top of the items (delivery and the like). Absent: no fees.
+  max_fee: Money.optional(),
   merchants: z.array(z.string().min(1).max(200)).min(1).max(50),
   allowed_actions: z.array(z.string().min(1).max(100)).min(1).max(50),
   expires_at: z.iso.datetime(),
@@ -64,13 +69,21 @@ export const Merchant = z.strictObject({
   id: z.string().min(1).max(200),
   name: z.string().min(1).max(200),
   payee_email: z.email().optional(),
+  // Where the agent's browser really was at checkout. Set by the integration from the page's
+  // address, never by the model, and matched against the merchant registry.
+  checkout_origin: z.url({ protocol: /^https?$/ }).max(2000).optional(),
 });
 export type Merchant = z.infer<typeof Merchant>;
+
+// A charge on top of the items, such as delivery.
+export const Fee = z.strictObject({ label: z.string().min(1).max(200), amount: Money });
+export type Fee = z.infer<typeof Fee>;
 
 // Arguments of payment.* actions. Other action types keep their args generic.
 export const PaymentArgs = z.strictObject({
   merchant: Merchant,
   items: z.array(LineItem).min(1).max(100),
+  fees: z.array(Fee).max(10).optional(),
   total: Money,
 });
 export type PaymentArgs = z.infer<typeof PaymentArgs>;

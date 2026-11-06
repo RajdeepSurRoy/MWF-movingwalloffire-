@@ -1,5 +1,5 @@
 {
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Phase 0 deterministic rules. Every change bumps the version; every decision logs it.",
   "risk": {
     "weights": { "info": 5, "soft": 15, "hard": 40 },
@@ -30,7 +30,7 @@
       "id": "CTX.AGENT_ADDRESSED",
       "description": "Text written to the AI agent rather than to a human shopper",
       "patterns": [
-        "\\b(ai|llm)\\s+(agents?|assistants?|shoppers?|shopping assistants?|models?|buyers?)\\b",
+        "(?<!\\b(?:built-in|in-app|our)\\s)\\b(ai|llm)\\s+(agents?|assistants?|shoppers?|shopping assistants?|models?|buyers?)\\b",
         "\\bnote to (the )?(ai|assistants?|agents?)\\b",
         "(^|[.!?]\\s*)(assistant|agent)\\s*:",
         "\\bautomated (buyers?|orders?|shoppers?)\\b"
