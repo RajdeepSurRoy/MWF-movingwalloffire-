@@ -177,6 +177,24 @@ Agent (`apps/agent`): a tool loop that validates every model call, a `Model` int
 3. **Webhooks:** register in sandbox, verify signatures before trusting any event, record events in the ledger.
 4. **Cleanup:** evidence tests void anything they don't capture.
    - *Done when:* one ALLOW (captured) and one BLOCK (voided) run end to end with sandbox IDs written to the ledger.
+5. **Status 2026-11-09: built and run offline; the sandbox run is waiting on credentials.**
+   - **Who holds what.** `PayPalPayments` (`packages/sdk/src/paypal.ts`) runs in the business's process with its own sandbox app and a vaulted buyer wallet. The firewall never holds payment credentials.
+   - **Flow.** The Guard authorizes only after ALLOW at the check, then sends PayPal's hold (order, authorization, status, amount, payee as PayPal reports them) to `/v1/actions/commit`, then captures on ALLOW, voids on BLOCK and keeps the hold on REVIEW. Any failure voids. Each step has its own `PayPal-Request-Id` derived from the token's idempotency key.
+   - **Commit checks on the hold:**
+     - `COMMIT.HOLD_AMOUNT_MISMATCH`: PayPal holds a different amount or currency.
+     - `COMMIT.HOLD_PAYEE_MISMATCH`: the payee PayPal reports is not in the merchant registry.
+     - `COMMIT.HOLD_NOT_AUTHORIZED`: the authorization is not live.
+     - `COMMIT.HOLD_REUSED`: one authorization was already used for another action (per tenant).
+     - `COMMIT.HOLD_PAYEE_UNVERIFIED` → REVIEW: there is no registered payee to compare with.
+     - This closes the "self-asserted payee" limit for payments that go through the plugin. The payee comes from PayPal's record via the integration's code, not from the model or the page.
+   - **Evidence.** `POST /v1/payments/settle` writes the authorization, capture or void with PayPal's ids to the ledger, and whether the integration followed the decision. `POST /webhooks/paypal` accepts an event only after PayPal's verify-webhook-signature confirms it. Each event is recorded once and linked to its session.
+   - **Run.** `npm run pay-demo -w @mwf/agent -- --fake` passes offline: Shop A is captured; Shop B's checkout looks right, but PayPal would pay another account, so it is voided. Without `--fake` the same run goes to the sandbox.
+   - **Not done:**
+     - the sandbox run (needs `PAYPAL_CLIENT_ID`/`SECRET`, `PAYPAL_PAYEE_EMAIL` and the Vault spike's buyer approval)
+     - webhook registration
+     - the console approve/reject for REVIEW holds (M9)
+     - FreshCart and Errand still pay through their own PayPal code, not this plugin
+     - a forged webhook still costs one call to PayPal's verify API; there is no rate limit yet
 
 ## M7 — Neural sensors (Nov 7–9)
 

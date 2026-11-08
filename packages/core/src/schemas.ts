@@ -88,6 +88,21 @@ export const PaymentArgs = z.strictObject({
 });
 export type PaymentArgs = z.infer<typeof PaymentArgs>;
 
+// Funds the payment provider is holding for an approved payment (two-phase commit: authorize,
+// check, then capture or void). Every field is copied by the integration's code from the
+// provider's own response, never from the model or the page.
+export const PaymentHold = z.strictObject({
+  provider: z.literal("paypal"),
+  order_id: z.string().min(1).max(64).regex(/^[A-Za-z0-9-]+$/),
+  authorization_id: z.string().min(1).max(64).regex(/^[A-Za-z0-9-]+$/),
+  // The authorization's status as the provider reported it. Only CREATED holds funds to capture.
+  status: z.string().min(1).max(40),
+  amount: Money,
+  // Who the provider says will be paid.
+  payee: z.strictObject({ email: z.email().max(320).optional(), merchant_id: z.string().max(64).optional() }),
+});
+export type PaymentHold = z.infer<typeof PaymentHold>;
+
 // A side effect the agent wants to cause. The core does not know what a payment is;
 // the action type tells the policy which argument schema applies.
 export const ProposedAction = z.strictObject({

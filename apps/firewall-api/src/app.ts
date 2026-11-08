@@ -13,6 +13,7 @@ import {
   type MerchantRecord,
   POLICY_VERSION,
   PaymentArgs,
+  PaymentHold,
   ProposedAction,
   RenderReport,
   type RenderReports,
@@ -45,6 +46,17 @@ const CommitActionBody = z.strictObject({
   session_id: SessionId,
   action_token: z.string().min(1).max(200),
   action: ProposedAction,
+  // Payments: the funds the provider is holding (authorize first, then commit, then capture/void).
+  hold: PaymentHold.optional(),
+});
+const SettleBody = z.strictObject({
+  session_id: SessionId,
+  provider: z.literal("paypal"),
+  authorization_id: z.string().min(1).max(64),
+  outcome: z.enum(["captured", "voided", "held"]),
+  // The provider's own ids and status for what happened, for the evidence trail.
+  capture_id: z.string().min(1).max(64).regex(/^[A-Za-z0-9-]+$/).optional(),
+  status: z.string().min(1).max(40),
 });
 const ReleaseActionBody = z.strictObject({ session_id: SessionId, action_token: z.string().min(1).max(200) });
 const CheckOutputBody = z.strictObject({
@@ -67,11 +79,16 @@ const secret = (prefix: string) => prefix + randomBytes(32).toString("base64url"
 // failures are reports with ok: false. Without one, pages get the static visibility check only.
 export type Render = (item: ContextItem) => Promise<RenderReport>;
 
+// Checks a PayPal webhook delivery with PayPal itself (see paypal-webhook.ts). Returns false for
+// a delivery PayPal does not confirm.
+export type VerifyWebhook = (headers: Record<string, string | string[] | undefined>, event: unknown) => Promise<boolean>;
+
 export function buildApp({
   db = openDatabase(":memory:"),
   bundle = getDefaultBundle(),
   render,
-}: { db?: DatabaseSync; bundle?: RuleBundle; render?: Render } = {}) {
+  verifyPayPalWebhook,
+}: { db?: DatabaseSync; bundle?: RuleBundle; render?: Render; verifyPayPalWebhook?: VerifyWebhook } = {}) {
   const app = Fastify({ logger: false, bodyLimit: 1_048_576 });
   const ledger = new Ledger(db);
 
@@ -88,8 +105,10 @@ export function buildApp({
 
   app.get("/healthz", async () => ({ ok: true, failClosedDecision: DEFAULT_DECISION, ruleBundle: bundle.version }));
 
+  webhookRoutes(app, db, ledger, verifyPayPalWebhook);
+
   // Every /v1 route lives in this plugin, so its auth hook applies to the matched routes
-  // whatever the URL encoding. Routes outside it (only /healthz) are public.
+  // whatever the URL encoding. Routes outside it (/healthz, provider webhooks) are public.
   app.register(async (v1) => v1Routes(v1, db, ledger, bundle, render), { prefix: "/v1" });
 
   return app;
@@ -308,6 +327,13 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     const token = db
       .prepare("SELECT action_hash, committed_at, expires_at FROM action_tokens WHERE token_hash = ? AND session_id = ?")
       .get(tokenHash, body.session_id) as { action_hash: string; committed_at: string | null; expires_at: string } | undefined;
+    const hold = body.hold;
+    // An authorization already bound to another approved action cannot settle this one.
+    const holdTaken =
+      hold !== undefined &&
+      db
+        .prepare("SELECT 1 FROM action_tokens WHERE hold_tenant_id = ? AND hold_provider = ? AND hold_authorization_id = ? AND token_hash <> ?")
+        .get(tenantId, hold.provider, hold.authorization_id, tokenHash) !== undefined;
 
     let result: EngineResult;
     if (!token) {
@@ -321,11 +347,41 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
         executedAction: body.action,
         alreadyCommitted: consumed === 0,
         expired: Date.parse(token.expires_at) <= now.getTime(),
+        ...(hold && { hold, merchants: loadMerchants(tenantId) }),
       });
+      if (holdTaken) {
+        const reused = { rule_id: "COMMIT.HOLD_REUSED", message: "This authorization was already committed for another action" };
+        result = { ...result, decision: "BLOCK", reasons: [reused, ...(result.decision === "ALLOW" ? [] : result.reasons)] };
+      }
     }
     addRisk(body.session_id, result);
     const rec = record(tenantId, "commit", body.session_id, result, hashCanonical(body.action));
-    return { ...respond(rec), action_hash: rec.action_hash };
+    // The first commit of a token binds its hold, so the hold's capture or void is recorded
+    // against this decision. A replayed token never rebinds.
+    if (token && hold && !holdTaken) {
+      db.prepare(
+        "UPDATE action_tokens SET hold_tenant_id = ?, hold_provider = ?, hold_order_id = ?, hold_authorization_id = ?, commit_decision = ? WHERE token_hash = ? AND commit_decision IS NULL",
+      ).run(tenantId, hold.provider, hold.order_id, hold.authorization_id, rec.decision, tokenHash);
+    }
+    if (hold) {
+      ledger.append("payment", {
+        tenant_id: tenantId,
+        session_id: body.session_id,
+        decision_id: rec.id,
+        stage: "authorized",
+        provider: hold.provider,
+        order_id: hold.order_id,
+        authorization_id: hold.authorization_id,
+        status: hold.status,
+        amount: hold.amount,
+        payee: hold.payee,
+        commit_decision: rec.decision,
+        recorded_at: new Date().toISOString(),
+      });
+    }
+    // What the integration must do with the hold: capture only on ALLOW.
+    const settle = hold ? (rec.decision === "ALLOW" ? "capture" : rec.decision === "BLOCK" ? "void" : "hold") : undefined;
+    return { ...respond(rec), action_hash: rec.action_hash, ...(settle && { settle }) };
   });
 
   // The user declined, or the agent replaced the action: the token dies and its money is free again.
@@ -337,6 +393,44 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
       .prepare("UPDATE action_tokens SET expires_at = ? WHERE token_hash = ? AND session_id = ? AND committed_at IS NULL")
       .run(new Date().toISOString(), hashCanonical(body.action_token), body.session_id).changes;
     return { released: released > 0 };
+  });
+
+  // How a committed hold ended. The firewall cannot move the money itself; this records what the
+  // integration did, with the provider's ids, and whether it followed the decision.
+  v1.post("/payments/settle", async (req, reply) => {
+    const tenantId = tenantOf(req);
+    const body = SettleBody.parse(req.body);
+    loadSession(tenantId, body.session_id);
+    const row = db
+      .prepare(
+        "SELECT token_hash, commit_decision, settled_as, hold_order_id FROM action_tokens WHERE hold_tenant_id = ? AND session_id = ? AND hold_provider = ? AND hold_authorization_id = ?",
+      )
+      .get(tenantId, body.session_id, body.provider, body.authorization_id) as
+      | { token_hash: string; commit_decision: string; settled_as: string | null; hold_order_id: string }
+      | undefined;
+    if (!row) throw new NotFound();
+    // "held" can later become captured or voided; captured and voided are final.
+    if (row.settled_as === "captured" || row.settled_as === "voided") {
+      return reply.code(409).send({ error: "already_settled", settled_as: row.settled_as });
+    }
+    // Voiding is always safe. Capturing anything the firewall did not ALLOW is recorded as such.
+    const followsDecision =
+      body.outcome === "voided" || (body.outcome === "captured" ? row.commit_decision === "ALLOW" : row.commit_decision === "REVIEW");
+    db.prepare("UPDATE action_tokens SET settled_as = ? WHERE token_hash = ?").run(body.outcome, row.token_hash);
+    const entry = ledger.append("payment", {
+      tenant_id: tenantId,
+      session_id: body.session_id,
+      stage: body.outcome,
+      provider: body.provider,
+      order_id: row.hold_order_id,
+      authorization_id: body.authorization_id,
+      ...(body.capture_id && { capture_id: body.capture_id }),
+      status: body.status,
+      commit_decision: row.commit_decision,
+      follows_decision: followsDecision,
+      recorded_at: new Date().toISOString(),
+    });
+    return { recorded: true, ledger_seq: entry.seq, follows_decision: followsDecision };
   });
 
   // Checkpoint 5 — output check.
@@ -363,5 +457,56 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     const id = randomUUID();
     ledger.append("feedback", { id, tenant_id: tenantId, ...body, received_at: new Date().toISOString() });
     return reply.code(202).send({ feedback_id: id, received: true });
+  });
+}
+
+// PayPal calls this, not a tenant, so it has no API key: a delivery counts only once PayPal
+// confirms its signature. Each event is recorded once, linked to the session whose hold it is about.
+function webhookRoutes(app: FastifyInstance, db: DatabaseSync, ledger: Ledger, verify: VerifyWebhook | undefined) {
+  const WebhookEvent = z.looseObject({
+    id: z.string().min(1).max(128),
+    event_type: z.string().min(1).max(128),
+    resource: z.looseObject({
+      id: z.string().max(128).optional(),
+      status: z.string().max(40).optional(),
+      supplementary_data: z.looseObject({ related_ids: z.looseObject({ authorization_id: z.string().max(128).optional() }).optional() }).optional(),
+    }),
+  });
+  app.post("/webhooks/paypal", async (req, reply) => {
+    if (!verify) return reply.code(503).send({ error: "webhooks_not_configured" });
+    const event = WebhookEvent.safeParse(req.body);
+    if (!event.success) return reply.code(400).send({ error: "invalid_event" });
+    let ok = false;
+    try {
+      ok = await verify(req.headers, req.body);
+    } catch {
+      ok = false;
+    }
+    if (!ok) return reply.code(400).send({ error: "unverified" });
+    const e = event.data;
+    const fresh = db.prepare("INSERT OR IGNORE INTO webhook_events (provider, event_id, received_at) VALUES ('paypal', ?, ?)").run(e.id, new Date().toISOString()).changes;
+    if (fresh === 0) return { received: true, duplicate: true };
+    // Authorization events name the authorization; capture events point back to it.
+    const authorizationId = e.event_type.startsWith("PAYMENT.AUTHORIZATION.") ? e.resource.id : e.resource.supplementary_data?.related_ids?.authorization_id;
+    // Linked only when exactly one tenant committed that authorization: an id two tenants
+    // claimed belongs to neither for sure.
+    const owners = authorizationId
+      ? (db
+          .prepare("SELECT session_id, hold_tenant_id AS tenant_id FROM action_tokens WHERE hold_provider = 'paypal' AND hold_authorization_id = ?")
+          .all(authorizationId) as { session_id: string; tenant_id: string }[])
+      : [];
+    const owner = owners.length === 1 ? owners[0] : undefined;
+    ledger.append("webhook", {
+      provider: "paypal",
+      event_id: e.id,
+      event_type: e.event_type,
+      resource_id: e.resource.id ?? null,
+      resource_status: e.resource.status ?? null,
+      authorization_id: authorizationId ?? null,
+      tenant_id: owner?.tenant_id ?? null,
+      session_id: owner?.session_id ?? null,
+      received_at: new Date().toISOString(),
+    });
+    return { received: true };
   });
 }

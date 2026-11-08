@@ -1,6 +1,7 @@
-import type { ContextItem, Mandate, ProposedAction } from "@mwf/core";
-import { type FirewallClient, FirewallError, type FirewallSession, type Verdict } from "./client.js";
+import type { ContextItem, Mandate, PaymentHold, ProposedAction } from "@mwf/core";
+import { type Approval, type FirewallClient, FirewallError, type FirewallSession, type Verdict } from "./client.js";
 import { type BrowserPage, type BrowserRequest, type BrowserResponse, pageContextItem, recordStylesheets } from "./page.js";
+import type { PaymentPlugin } from "./paypal.js";
 
 // The tools an agent gets instead of its own browser and payment access.
 //
@@ -35,7 +36,18 @@ export type ReadResult =
   | { status: "withheld"; id: string; uri: string | null; rule_ids: string[] }
   | { status: "refused"; rule_ids: string[] }; // the request itself was not sent
 
-export type ProposalResult<R> = { status: "executed"; receipt: R } | { status: "BLOCK" | "REVIEW"; rule_ids: string[] };
+// For a payment the provider held funds for, `hold` says which: voided after BLOCK, still held
+// after REVIEW (for a person to capture or void).
+export type ProposalResult<R> =
+  | { status: "executed"; receipt: R }
+  | { status: "BLOCK" | "REVIEW"; rule_ids: string[]; hold?: PaymentHold };
+
+// What a captured payment hands to `execute`.
+export interface PaymentReceipt {
+  hold: PaymentHold;
+  capture_id: string;
+  status: string;
+}
 
 export interface GuardedTools<R> {
   browse(url: string): Promise<ReadResult>;
@@ -56,7 +68,10 @@ export interface GuardOptions<R> {
   openTab: () => Promise<BrowserTab>;
   // Runs an action the firewall approved and committed; the only path to it. The key goes to the
   // payment provider, so a retried call cannot charge twice.
-  execute: (action: ProposedAction, idempotencyKey: string) => Promise<R>;
+  // With `payments`, a payment.* action reaches it only after its funds were captured.
+  execute: (action: ProposedAction, idempotencyKey: string, payment?: PaymentReceipt) => Promise<R>;
+  // Two-phase commit for payment.* actions: authorize, firewall commit check, capture or void.
+  payments?: PaymentPlugin;
   // Origins the agent's browser may talk to, besides trustedOrigins. Everything else is refused,
   // so an injected agent cannot reach internal services or send data to its own server.
   allowedOrigins: string[];
@@ -222,11 +237,69 @@ export class Guard<R> {
     this.events.push({ checkpoint: "action", verdict: check });
     if (!check.approval) return { status: check.decision === "BLOCK" ? "BLOCK" : "REVIEW", rule_ids: ruleIds(check) };
 
+    const payments = this.#options.payments;
+    if (payments && type.startsWith("payment.")) return this.#pay(payments, check.approval);
+
     const commit = await this.#session.commitAction(check.approval);
     this.events.push({ checkpoint: "commit", verdict: commit });
     if (commit.decision !== "ALLOW") return { status: commit.decision === "BLOCK" ? "BLOCK" : "REVIEW", rule_ids: ruleIds(commit) };
 
     return { status: "executed", receipt: await this.#options.execute(check.approval.action, check.approval.idempotencyKey) };
+  }
+
+  // Funds are held only after the firewall approved the action, and taken only after it checked
+  // what PayPal actually holds. Anything but ALLOW at commit voids the hold, except REVIEW, which
+  // keeps it for a person to decide.
+  async #pay(payments: PaymentPlugin, approval: Approval): Promise<ProposalResult<R>> {
+    const key = approval.idempotencyKey;
+    let hold: PaymentHold;
+    try {
+      hold = await payments.authorize(approval.action, key);
+    } catch (err) {
+      await this.#session.releaseAction(approval).catch(() => undefined);
+      throw err;
+    }
+    let commit;
+    try {
+      commit = await this.#session.commitAction(approval, approval.action, hold);
+    } catch (err) {
+      // No answer from the firewall is not permission.
+      await this.#voidQuietly(payments, hold, key);
+      throw err;
+    }
+    this.events.push({ checkpoint: "commit", verdict: commit });
+
+    if (commit.decision === "ALLOW" && commit.settle === "capture") {
+      let captured: { capture_id: string; status: string };
+      try {
+        captured = await payments.capture(hold, key);
+      } catch (err) {
+        await this.#voidQuietly(payments, hold, key);
+        throw err;
+      }
+      // The money is taken: the order step runs even if the firewall could not record it.
+      await this.#session.settlePayment(hold, { outcome: "captured", status: captured.status, capture_id: captured.capture_id }).catch(() => undefined);
+      const receipt = await this.#options.execute(approval.action, key, { hold, ...captured });
+      return { status: "executed", receipt };
+    }
+    if (commit.decision === "REVIEW") {
+      await this.#session.settlePayment(hold, { outcome: "held", status: hold.status }).catch(() => undefined);
+      return { status: "REVIEW", rule_ids: ruleIds(commit), hold };
+    }
+    // BLOCK, or an ALLOW without a capture instruction.
+    await this.#voidQuietly(payments, hold, key);
+    return { status: "BLOCK", rule_ids: ruleIds(commit), hold };
+  }
+
+  // Voids the hold and records it. A failed void leaves the authorization to expire at PayPal,
+  // which never captures it; the error is not the agent's to handle.
+  async #voidQuietly(payments: PaymentPlugin, hold: PaymentHold, key: string) {
+    try {
+      const v = await payments.void(hold, key);
+      await this.#session.settlePayment(hold, { outcome: "voided", status: v.status }).catch(() => undefined);
+    } catch {
+      /* see above */
+    }
   }
 
   // The agent's final message, or null if it must not be shown.

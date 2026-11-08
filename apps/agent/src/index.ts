@@ -4,3 +4,4 @@ export * from "./naive.js";
 export * from "./replay.js";
 export * from "./run.js";
 export * from "./shop.js";
+export * from "./payments.js";

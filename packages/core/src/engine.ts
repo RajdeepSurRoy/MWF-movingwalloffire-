@@ -9,6 +9,7 @@ import {
   type ContextItem,
   type DecisionResult,
   type Mandate,
+  type PaymentHold,
   type ProposedAction,
   type Reason,
   PaymentArgs,
@@ -262,6 +263,10 @@ export interface CommitCheckInput {
   executedAction: ProposedAction;
   alreadyCommitted: boolean;
   expired?: boolean;
+  // Funds the provider holds for this payment, and the tenant's merchant registry to check the
+  // provider's payee against. The payee in the action came from the agent; this one from PayPal.
+  hold?: PaymentHold;
+  merchants?: MerchantRecord[];
 }
 
 export function checkCommit(input: CommitCheckInput): EngineResult {
@@ -271,8 +276,37 @@ export function checkCommit(input: CommitCheckInput): EngineResult {
   if (hashCanonical(input.executedAction) !== input.approvedActionHash) {
     block.push(reason("COMMIT.HASH_MISMATCH", "The action being executed differs from the one approved"));
   }
+  const review: Reason[] = [];
+  if (input.hold) checkHold(input.hold, input.executedAction, input.merchants ?? [], block, review);
   if (block.length) return { decision: "BLOCK", reasons: block, findings: [], risk: 0 };
-  return { decision: "ALLOW", reasons: [reason("COMMIT.HASH_MATCH", "Executed action matches the approved hash")], findings: [], risk: 0 };
+  if (review.length) return { decision: "REVIEW", reasons: review, findings: [], risk: 0 };
+  const ok = [reason("COMMIT.HASH_MATCH", "Executed action matches the approved hash")];
+  if (input.hold) ok.push(reason("COMMIT.HOLD_MATCH", "The provider holds the approved amount for a registered payee"));
+  return { decision: "ALLOW", reasons: ok, findings: [], risk: 0 };
+}
+
+// The hold must be live, for exactly the approved total, and payable to an address the registry
+// lists for the approved merchant. A merchant registered by checkout address only has no payee
+// to compare with, so a person decides.
+function checkHold(hold: PaymentHold, action: ProposedAction, merchants: MerchantRecord[], block: Reason[], review: Reason[]) {
+  const payment = PaymentArgs.safeParse(action.args);
+  if (!action.type.startsWith("payment.") || !payment.success) {
+    block.push(reason("COMMIT.HOLD_NOT_PAYMENT", "A payment hold was sent for an action that is not a payment"));
+    return;
+  }
+  if (hold.status !== "CREATED") block.push(reason("COMMIT.HOLD_NOT_AUTHORIZED", `The provider's authorization is ${hold.status}, not CREATED`));
+  const total = payment.data.total;
+  if (hold.amount.currency !== total.currency || toCents(hold.amount) !== toCents(total)) {
+    block.push(reason("COMMIT.HOLD_AMOUNT_MISMATCH", `The provider holds ${hold.amount.value} ${hold.amount.currency}, the approved total is ${total.value} ${total.currency}`));
+  }
+  const merchant = merchants.find((m) => sameId(m.id, payment.data.merchant.id));
+  if (!merchant || merchant.payee_emails.length === 0) {
+    review.push(reason("COMMIT.HOLD_PAYEE_UNVERIFIED", "No registered payee to compare the provider's payee with"));
+  } else if (!hold.payee.email) {
+    review.push(reason("COMMIT.HOLD_PAYEE_UNVERIFIED", "The provider did not report the payee's email"));
+  } else if (!merchant.payee_emails.some((p) => normalizeEmail(p) === normalizeEmail(hold.payee.email!))) {
+    block.push(reason("COMMIT.HOLD_PAYEE_MISMATCH", "The provider would pay someone the registry does not list for this merchant"));
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -126,6 +126,27 @@ export function openDatabase(path: string): DatabaseSync {
   addColumnIfMissing(db, "merchants", "checkout_origins", "TEXT NOT NULL DEFAULT '[]'");
   // What the token would spend, so a session's purchases can be held to its mandate together.
   addColumnIfMissing(db, "action_tokens", "amount_cents", "INTEGER NOT NULL DEFAULT 0");
+  // Two-phase payments: the provider's hold this token was committed with, the commit's
+  // decision, and how the hold ended (captured, voided, held for a person).
+  addColumnIfMissing(db, "action_tokens", "hold_provider", "TEXT");
+  addColumnIfMissing(db, "action_tokens", "hold_order_id", "TEXT");
+  addColumnIfMissing(db, "action_tokens", "hold_authorization_id", "TEXT");
+  addColumnIfMissing(db, "action_tokens", "commit_decision", "TEXT");
+  addColumnIfMissing(db, "action_tokens", "settled_as", "TEXT");
+  addColumnIfMissing(db, "action_tokens", "hold_tenant_id", "TEXT");
+  // Within a tenant, one authorization settles one approved action, never two. Per tenant, so
+  // one tenant cannot claim another's authorization id first and block its payments.
+  db.exec("DROP INDEX IF EXISTS action_tokens_hold");
+  db.exec(
+    "CREATE UNIQUE INDEX IF NOT EXISTS action_tokens_tenant_hold ON action_tokens (hold_tenant_id, hold_provider, hold_authorization_id) WHERE hold_authorization_id IS NOT NULL",
+  );
+  // Provider webhook events already recorded, so a redelivery is not recorded twice.
+  db.exec(`CREATE TABLE IF NOT EXISTS webhook_events (
+    provider    TEXT NOT NULL,
+    event_id    TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    PRIMARY KEY (provider, event_id)
+  )`);
   return db;
 }
 

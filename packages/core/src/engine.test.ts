@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { hashCanonical } from "./canonical.js";
 import { checkAction, checkCommit, checkContext, checkIntent, checkOutput, leaksCanary } from "./engine.js";
-import { lookalikeOf } from "./merchant.js";
+import { type MerchantRecord, lookalikeOf } from "./merchant.js";
 import { getDefaultBundle } from "./rules.js";
 import type { ContextItem, Mandate, ProposedAction } from "./schemas.js";
 
@@ -262,6 +262,45 @@ describe("checkCommit", () => {
     expect(rules(checkCommit({ approvedActionHash: approved, executedAction: pay({ total: { value: "8.99", currency: "USD" } }), alreadyCommitted: false }))).toEqual(["COMMIT.HASH_MISMATCH"]);
     expect(rules(checkCommit({ approvedActionHash: approved, executedAction: pay(), alreadyCommitted: true }))).toEqual(["COMMIT.REPLAY"]);
     expect(rules(checkCommit({ approvedActionHash: approved, executedAction: pay(), alreadyCommitted: false, expired: true }))).toEqual(["COMMIT.TOKEN_EXPIRED"]);
+  });
+
+  describe("with the provider's hold", () => {
+    const hold = (over: Record<string, unknown> = {}) => ({
+      provider: "paypal" as const,
+      order_id: "O1",
+      authorization_id: "A1",
+      status: "CREATED",
+      amount: { value: "7.99", currency: "USD" },
+      payee: { email: "Payments@Shop-A.example" },
+      ...over,
+    });
+    const commit = (h: ReturnType<typeof hold>, m: MerchantRecord[] = merchants, action = pay()) =>
+      checkCommit({ approvedActionHash: hashCanonical(action), executedAction: action, alreadyCommitted: false, hold: h, merchants: m });
+
+    it("allows the approved amount held for a registered payee", () => {
+      const r = commit(hold());
+      expect(r.decision).toBe("ALLOW");
+      expect(rules(r)).toEqual(["COMMIT.HASH_MATCH", "COMMIT.HOLD_MATCH"]);
+    });
+    it("blocks a hold for another amount or currency", () => {
+      expect(rules(commit(hold({ amount: { value: "79.90", currency: "USD" } })))).toEqual(["COMMIT.HOLD_AMOUNT_MISMATCH"]);
+      expect(rules(commit(hold({ amount: { value: "7.99", currency: "EUR" } })))).toEqual(["COMMIT.HOLD_AMOUNT_MISMATCH"]);
+    });
+    it("blocks a payee the registry does not list, even if the action named it", () => {
+      const action = pay({ merchant: { ...shopA, payee_email: "thief@evil.example" } });
+      expect(rules(commit(hold({ payee: { email: "thief@evil.example" } }), merchants, action))).toEqual(["COMMIT.HOLD_PAYEE_MISMATCH"]);
+    });
+    it("blocks an authorization that is not live", () => {
+      expect(rules(commit(hold({ status: "VOIDED" })))).toEqual(["COMMIT.HOLD_NOT_AUTHORIZED"]);
+    });
+    it("reviews when there is no registered payee to compare with", () => {
+      expect(commit(hold(), [{ id: "shop-a", name: "Shop A", payee_emails: [], checkout_origins: ["https://shop-a.example"] }]).decision).toBe("REVIEW");
+      expect(rules(commit(hold({ payee: {} })))).toEqual(["COMMIT.HOLD_PAYEE_UNVERIFIED"]);
+    });
+    it("blocks a hold sent with an action that is not a payment", () => {
+      const action: ProposedAction = { type: "email.send", args: { to: "a@b.example" }, derived_from: [] };
+      expect(rules(commit(hold(), merchants, action))).toEqual(["COMMIT.HOLD_NOT_PAYMENT"]);
+    });
   });
 });
 
