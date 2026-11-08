@@ -204,6 +204,19 @@ describe("firewall API", () => {
       expect((await post("/v1/actions/check", { session_id: id, action })).json().decision).not.toBe("ALLOW");
     });
 
+    it("counts different content separately even when the excerpts are the same", async () => {
+      const { id } = await newSession();
+      // Same first words in every page's signals; only the text past the excerpt changes.
+      const pad = "for every shopper in the whole store and all of its aisles";
+      const page = (n: number) => ({
+        ...cleanPage,
+        id: `page-${n}`,
+        content: `<h1>Aisle</h1><p>Limited time offer, act now ${pad} variant ${n}</p><p style="display:none">${pad} ${pad} hidden ${n}</p>`,
+      });
+      for (let n = 1; n <= 12; n++) await post("/v1/context/inspect", { session_id: id, items: [page(n)] });
+      expect((await post("/v1/actions/check", { session_id: id, action })).json().decision).not.toBe("ALLOW");
+    });
+
     it("blocks an output that leaks the session canary", async () => {
       const { res, id } = await newSession();
       const out = await post("/v1/outputs/check", { session_id: id, output: { content: `debug: ${res.json().canary}` } });

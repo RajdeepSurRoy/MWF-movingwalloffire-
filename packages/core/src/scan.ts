@@ -10,6 +10,9 @@ export interface Finding {
   item_id: string;
   channel: Channel | "text";
   excerpt: string;
+  /** Hash of everything that was detected (whole elements, all hidden texts), not just the excerpt.
+   *  The session risk score counts each distinct fingerprint once. */
+  fingerprint?: string;
 }
 
 const ZERO_WIDTH = /[​‌‍⁠﻿]/g;
@@ -87,8 +90,20 @@ function matchChannel(bundle: RuleBundle, texts: string[], channel: Channel | "t
         }
       }
     };
-    const found = (rule_id: string, severity: Finding["severity"], index: number) => {
-      if (!findings.has(rule_id)) findings.set(rule_id, { rule_id, severity, item_id: itemId, channel, excerpt: excerptOf(joined, index) });
+    // The whole texts every match overlaps: two findings with the same excerpt but different
+    // content get different fingerprints.
+    const matchedTexts = (matches: RegExpMatchArray[]) => {
+      const seen = new Set<number>();
+      for (const m of matches) {
+        const end = m.index! + Math.max(m[0].length, 1);
+        for (let k = unitAt(m.index!); k < parts.length && starts[k]! < end; k++) seen.add(k);
+      }
+      return [...seen].sort((a, b) => a - b).map((k) => parts[k]!);
+    };
+    const found = (rule_id: string, severity: Finding["severity"], matches: RegExpMatchArray[]) => {
+      if (findings.has(rule_id)) return;
+      const fingerprint = hashCanonical([rule_id, matchedTexts(matches)]);
+      findings.set(rule_id, { rule_id, severity, item_id: itemId, channel, excerpt: excerptOf(joined, matches[0]!.index!), fingerprint });
     };
     for (const rule of bundle.text_rules) {
       const severity = severityIn(rule, channel);
@@ -97,8 +112,8 @@ function matchChannel(bundle: RuleBundle, texts: string[], channel: Channel | "t
         if (!matches.length) continue;
         // Matches only once zero-width characters are removed: the text was disguised on purpose.
         const disguised = !regex(bundle, p, "imu").test(unstripped);
-        if (disguised) found("CTX.OBFUSCATED_INSTRUCTION", "hard", matches[0]!.index);
-        if (severity !== "none") found(rule.id, severity, matches[0]!.index);
+        if (disguised) found("CTX.OBFUSCATED_INSTRUCTION", "hard", matches);
+        if (severity !== "none") found(rule.id, severity, matches);
         for (const m of matches) {
           const end = m.index + Math.max(m[0].length, 1);
           if (disguised) mark(m.index, end, "hard", "CTX.OBFUSCATED_INSTRUCTION");
@@ -238,9 +253,11 @@ export function analyzeContextItem(item: ContextItem, bundle: RuleBundle, render
   const push = (f: Finding) => {
     if (!findings.some((x) => x.rule_id === f.rule_id && x.channel === f.channel)) findings.push(f);
   };
+  // For signals whose excerpt is fixed text: every different page counts.
+  const pageFingerprint = hashCanonical([item.content, item.resources ?? null]);
 
   if (ZERO_WIDTH_IN_WORD.test(item.content)) {
-    push({ rule_id: "CTX.ZERO_WIDTH", severity: "soft", item_id: item.id, channel: "text", excerpt: "zero-width characters inside words" });
+    push({ rule_id: "CTX.ZERO_WIDTH", severity: "soft", item_id: item.id, channel: "text", excerpt: "zero-width characters inside words", fingerprint: pageFingerprint });
   }
 
   if (item.content_type !== "text/html") {
@@ -254,7 +271,7 @@ export function analyzeContextItem(item: ContextItem, bundle: RuleBundle, render
   if (styleOverflow && !render?.ok) {
     // Too much CSS to analyse within limits: visibility is unknown, so do not let it pass clean.
     // A successful render applied all of it with the real cascade, so it covers this.
-    push({ rule_id: "CTX.STYLE_UNANALYSABLE", severity: "soft", item_id: item.id, channel: "hidden", excerpt: "page CSS exceeds analysis limits" });
+    push({ rule_id: "CTX.STYLE_UNANALYSABLE", severity: "soft", item_id: item.id, channel: "hidden", excerpt: "page CSS exceeds analysis limits", fingerprint: pageFingerprint });
   }
   // The browser's own list of stylesheets it was not given: catches any syntax the static
   // discovery above does not understand.
@@ -262,10 +279,10 @@ export function analyzeContextItem(item: ContextItem, bundle: RuleBundle, render
   if (styles.missing.length > 0) {
     // Hiding can live in CSS we were not given, so what a person sees is unknown.
     const more = styles.missing.length > 1 ? ` and ${styles.missing.length - 1} more` : "";
-    push({ rule_id: "CTX.STYLES_NOT_PROVIDED", severity: "soft", item_id: item.id, channel: "hidden", excerpt: `${styles.missing[0]!.slice(0, 120)}${more}` });
+    push({ rule_id: "CTX.STYLES_NOT_PROVIDED", severity: "soft", item_id: item.id, channel: "hidden", excerpt: `${styles.missing[0]!.slice(0, 120)}${more}`, fingerprint: hashCanonical([...styles.missing].sort()) });
   }
   if (render?.ok === false) {
-    push({ rule_id: "CTX.RENDER_FAILED", severity: "soft", item_id: item.id, channel: "hidden", excerpt: render.error.slice(0, 80) });
+    push({ rule_id: "CTX.RENDER_FAILED", severity: "soft", item_id: item.id, channel: "hidden", excerpt: render.error.slice(0, 80), fingerprint: pageFingerprint });
   } else if (render) {
     segments.push(...renderedSegments(render));
   }
@@ -282,7 +299,7 @@ export function analyzeContextItem(item: ContextItem, bundle: RuleBundle, render
   const hidden = segments.filter((s) => s.channel === "hidden");
   if (hidden.length > 0) {
     // Hidden text alone is common on real sites (menus, screen-reader text): a weak signal.
-    push({ rule_id: "CTX.HIDDEN_TEXT", severity: "info", item_id: item.id, channel: "hidden", excerpt: `${hidden[0]!.how}: ${hidden[0]!.text.trim().slice(0, 60)}` });
+    push({ rule_id: "CTX.HIDDEN_TEXT", severity: "info", item_id: item.id, channel: "hidden", excerpt: `${hidden[0]!.how}: ${hidden[0]!.text.trim().slice(0, 60)}`, fingerprint: hashCanonical(hidden.map((h) => [h.how, h.text.trim()])) });
   }
   const marks = new Map<number, Mark>();
   for (const [channel, idxs] of byChannel) {

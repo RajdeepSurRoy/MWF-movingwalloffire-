@@ -45,7 +45,8 @@ const findingRisk = (findings: Finding[], bundle: RuleBundle) => {
   const seen = new Set<string>();
   let sum = 0;
   for (const f of findings) {
-    const key = `${f.rule_id}|${f.severity}|${f.channel}|${f.excerpt}`;
+    // The fingerprint covers all the detected content; the excerpt is only its first few words.
+    const key = `${f.rule_id}|${f.severity}|${f.channel}|${f.fingerprint ?? `item:${f.item_id}|${f.excerpt}`}`;
     if (seen.has(key)) continue;
     seen.add(key);
     sum += bundle.risk.weights[f.severity];
