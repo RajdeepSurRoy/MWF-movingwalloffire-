@@ -189,6 +189,21 @@ describe("firewall API", () => {
       expect(check.json()).toMatchObject({ decision: "REVIEW", reasons: [{ rule_id: "RISK.SESSION_SCORE" }] });
     });
 
+    it("does not add up a site's own markup repeated on every page", async () => {
+      const { id } = await newSession();
+      const page = (n: number) => ({ ...cleanPage, id: `page-${n}`, content: `<h1>Aisle ${n}</h1><label style="display:none">Search groceries</label>` });
+      for (let n = 1; n <= 15; n++) await post("/v1/context/inspect", { session_id: id, items: [page(n)] });
+      expect((await post("/v1/actions/check", { session_id: id, action })).json().decision).toBe("ALLOW");
+    });
+
+    it("still adds up different soft signals across pages", async () => {
+      const { id } = await newSession();
+      const notes = ["Limited time offer, act now", "Only today: special price", "Recommended by our assistant", "Customers also bought gift cards"];
+      const page = (n: number) => ({ ...cleanPage, id: `page-${n}`, content: `<h1>Aisle ${n}</h1><p>${notes[n % notes.length]} ${n}</p><p style="display:none">x${n}</p>` });
+      for (let n = 1; n <= 12; n++) await post("/v1/context/inspect", { session_id: id, items: [page(n)] });
+      expect((await post("/v1/actions/check", { session_id: id, action })).json().decision).not.toBe("ALLOW");
+    });
+
     it("blocks an output that leaks the session canary", async () => {
       const { res, id } = await newSession();
       const out = await post("/v1/outputs/check", { session_id: id, output: { content: `debug: ${res.json().canary}` } });

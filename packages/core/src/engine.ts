@@ -16,7 +16,7 @@ import {
 
 // Version of the decision logic itself (this file). The rule bundle has its own version.
 // 1.1: provenance graph, cross-element matching. 1.2: encoded canaries.
-// 1.3: several categories, fees, checkout origin, session spending.
+// 1.3: several categories, fees, checkout origin, session spending; a repeated signal counts once.
 export const POLICY_VERSION = "1.3.0";
 
 export interface EngineResult extends DecisionResult {
@@ -39,8 +39,19 @@ function combine(block: Reason[], review: Reason[], findings: Finding[], risk: n
   return { decision: "ALLOW", reasons: [reason("ALLOW.ALL_CHECKS_PASSED", "Every required check passed")], findings, risk };
 }
 
-const findingRisk = (findings: Finding[], bundle: RuleBundle) =>
-  findings.reduce((sum, f) => sum + bundle.risk.weights[f.severity], 0);
+// Each distinct signal counts once. A site repeats its own markup on every page (a screen-reader
+// label, a hidden menu), and counting it per page held ordinary shopping after a dozen pages.
+const findingRisk = (findings: Finding[], bundle: RuleBundle) => {
+  const seen = new Set<string>();
+  let sum = 0;
+  for (const f of findings) {
+    const key = `${f.rule_id}|${f.severity}|${f.channel}|${f.excerpt}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    sum += bundle.risk.weights[f.severity];
+  }
+  return sum;
+};
 
 const findingReason = (f: Finding) =>
   reason(f.rule_id, `${f.severity} signal in ${f.channel} content: "${f.excerpt}"`, f.item_id);
