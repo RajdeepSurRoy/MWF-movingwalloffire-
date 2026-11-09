@@ -56,6 +56,8 @@ export interface Claim {
   sku: string;
   // The claim text without the item's own words: what the page says about it.
   remainder: string[];
+  // The claim with the item's words replaced by "<item>": what the embedding sensor reads.
+  skeleton: string[];
   // Hash of the claim with the item's words replaced by a placeholder. The same attack on
   // another product, or re-encoded, has the same fingerprint.
   fingerprint: string;
@@ -81,7 +83,7 @@ export function findClaims(itemId: string, texts: string[], sku: string, name: s
     const fingerprint = hashCanonical(["claim/v1", skeleton]);
     if (seen.has(fingerprint)) continue;
     seen.add(fingerprint);
-    claims.push({ item_id: itemId, sku, remainder: own.filter(notItem), fingerprint, excerpt: text.replace(/\s+/g, " ").trim().slice(0, 120) });
+    claims.push({ item_id: itemId, sku, remainder: own.filter(notItem), skeleton, fingerprint, excerpt: text.replace(/\s+/g, " ").trim().slice(0, 120) });
   }
   return claims;
 }

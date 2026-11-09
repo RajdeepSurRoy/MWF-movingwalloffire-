@@ -11,3 +11,4 @@ export * from "./html.js";
 export * from "./rendered.js";
 export * from "./provenance.js";
 export * from "./claims.js";
+export * from "./sensors.js";

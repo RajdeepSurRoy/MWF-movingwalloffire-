@@ -18,6 +18,12 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # The embedding model for the sensors (23 MB, pinned by revision and file hash). Downloaded
+      # from Hugging Face on a cache miss; the sensor refuses a file with another hash.
+      - uses: actions/cache@v4
+        with:
+          path: .cache/models
+          key: models-minilm-751bff37
       # Headless Chromium for the page-visibility tests; MWF_REQUIRE_RENDER makes them fail
       # instead of skipping if the browser is missing.
       - run: npx playwright install --with-deps --only-shell chromium
@@ -30,6 +36,6 @@ jobs:
       # The battery report. Strict since the learned rule LRN.CLAIM.CCB11DF2 was enforced
       # (bundle 1.7.0): fails unless every case matches, 0% attack success, 0% false positives.
       - run: npm run harness -- --strict
-      # The M8 learning loop end to end: exits 1 unless the learned rule holds the training
-      # seeds and all their mutations without holding a legitimate purchase.
+      # The M8 learning loop end to end, then the M7 sensor: exits 1 unless the learned rule holds
+      # the training seeds and all their mutations, and neither holds a legitimate purchase.
       - run: npm run redteam -- demo

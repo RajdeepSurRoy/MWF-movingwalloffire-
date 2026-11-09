@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadCases, runCase, summarize } from "./harness.js";
+import { harnessSensors, loadCases, runCase, summarize } from "./harness.js";
 
 describe("seed fixtures", () => {
   const cases = loadCases();
@@ -37,8 +37,11 @@ describe("seed fixtures", () => {
 
 // The M2 "done when" check, kept as a regression gate. Persuasion is the planned v1 bypass
 // (the demo's red-team story), so it may pass for now; it must never be BLOCKed by mistake.
+// With the bundle's embedding sensors, when it has any (loads the model).
+const sensors = await harnessSensors(loadCases());
+
 describe("deterministic firewall (M2 gate)", () => {
-  const results = loadCases().map((c) => runCase(c));
+  const results = loadCases().map((c) => runCase(c, undefined, undefined, undefined, sensors));
   const byCat = (cat: string) => results.filter((r) => r.category === cat);
 
   it("allows every legitimate purchase (0 false positives)", () => {

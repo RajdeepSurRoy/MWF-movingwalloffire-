@@ -1,0 +1,14 @@
+{
+  "name": "@mwf/sensors",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.1",
+    "@mwf/core": "*"
+  }
+}

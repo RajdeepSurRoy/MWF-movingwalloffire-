@@ -3,6 +3,7 @@
 //   npm run redteam -- demo                       the whole loop in memory; writes nothing
 //   npm run redteam -- run [--category persuasion]  mutate the attack fixtures, record bypasses
 //   npm run redteam -- learn                      propose a rule from the ledger and backtest it
+//   npm run redteam -- sensor                     train the persuasion embedding sensor, backtest it
 //   npm run redteam -- approve <rule-id> --by <name>   candidate → shadow (bumps the bundle)
 //   npm run redteam -- enforce <rule-id> --by <name>   shadow → enforced (bumps the bundle)
 //
@@ -10,11 +11,13 @@
 // packages/core/rules/bundle.json; commit it like any other rule change.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { type RuleBundle, type TestCase, getDefaultBundle, loadRuleBundle } from "@mwf/core";
+import { type ClaimSensor, type RuleBundle, type SensorVectors, type TestCase, getDefaultBundle, hashCanonical, loadRuleBundle } from "@mwf/core";
+import { loadEmbedder } from "@mwf/sensors";
 import { loadCases, loadMerchants } from "@mwf/tests/harness";
 import { type Candidate, type Ledger, emptyLedger, legitPhrases, propose, record } from "./learn.js";
 import { HELD_OUT_PARAPHRASES, type Variant, mutationKind } from "./mutate.js";
-import { type Backtest, approve, backtest, enforce, shadowHits, withoutLearned, writeBundle } from "./rollout.js";
+import { type Backtest, approve, approveSensor, backtest, enforce, shadowHits, withoutLearned, writeBundle } from "./rollout.js";
+import { caseTexts, negatives, trainSensor, vectorsFor } from "./sensor.js";
 import { type Run, expand, runAll } from "./runner.js";
 
 const ROOT = resolve(import.meta.dirname, "../..");
@@ -22,6 +25,9 @@ const DATA = join(ROOT, "redteam", "data");
 const LEDGER = join(DATA, "ledger.json");
 const CANDIDATES = join(DATA, "candidates.json");
 const BENIGN = join(DATA, "benign.txt");
+const COPY = join(DATA, "product-copy.txt");
+const SENSOR = join(DATA, "sensor-candidate.json");
+
 const BUNDLE = join(ROOT, "packages", "core", "rules", "bundle.json");
 
 const args = process.argv.slice(2);
@@ -36,6 +42,8 @@ const merchants = loadMerchants();
 const all = loadCases();
 const legit = all.filter((c) => c.category === "legit");
 const attacks = all.filter((c) => c.category !== "legit");
+// Attacks kept out of learning, to measure what a learned rule or sensor does with new wording.
+const fresh = loadCases(undefined, ["fresh"]);
 const benign = existsSync(BENIGN) ? readFileSync(BENIGN, "utf8").split(/\r?\n/).filter((l) => l.trim() && !l.startsWith("#")) : [];
 const pct = (n: number, d: number) => (d === 0 ? "—" : `${((100 * n) / d).toFixed(0)}%`);
 
@@ -66,7 +74,7 @@ const backtestSet = (variants: Variant[]): Variant[] => [
   ...variants,
 ];
 
-function demo() {
+async function demo() {
   // Starts from the repo's bundle with its learned rules taken out, so the loop is shown from
   // the beginning even after rules have been approved.
   const v1 = withoutLearned(getDefaultBundle());
@@ -129,6 +137,38 @@ function demo() {
   const ok = runs3.filter((r) => r.bypass).length === 0 && fp === 0;
   console.log(ok ? `\n✔ The seeds bypass ${v1.version}; ${v3.version} holds them and all their mutations, and no legitimate purchase.` : "\n✖ The learned rule does not hold every seed and mutation.");
   process.exitCode = ok ? 0 : 1;
+  if (!ok || args.includes("--no-sensor")) return;
+
+  // Level 3 with embeddings: the phrases above do not reach new wording; a sensor reads meaning.
+  const embedder = await loadEmbedder();
+  const positives = caseTexts(runs1.filter((r) => r.bypass).map((r) => r.case), v1);
+  const { sensor } = await trainSensor(embedder, positives, negatives(COPY, BENIGN), "SEN.PERSUASION.DEMO");
+  const cal = sensor.learned.calibration;
+  console.log(`\n9. Embedding sensor ${sensor.id} (level 3), REVIEW only: ${embedder.model.name} (${embedder.model.sha256.slice(0, 12)}…) + logistic regression`);
+  console.log(`    trained on ${sensor.learned.positives} attack claims and ${sensor.learned.negatives} ordinary texts; threshold ${sensor.threshold}, above all ${cal.negatives} held-out ordinary texts (highest ${cal.max_score})`);
+  const everything = [...legit, ...attacks, ...trainVariants.map((v) => v.case), ...heldVariants.map((v) => v.case)];
+  const vectors = await vectorsFor(embedder, everything, v1);
+  // On its own, against the bundle with nothing learned, so the backtest shows what it adds.
+  const stest = backtest(v1, sensor, backtestSet(trainVariants), merchants, vectors);
+  printBacktest(stest);
+  let v5: RuleBundle;
+  try {
+    v5 = enforce(approveSensor(v3, sensor, stest, "demo"), sensor.id);
+  } catch (e) {
+    process.exitCode = 1;
+    return console.log(`\n✖ ${(e as Error).message}`);
+  }
+  console.log(`\n10. Approved and enforced → bundle ${v5.version}. Never seen, again:`);
+  console.log(`    bundle ${v3.version} (learned phrases):`);
+  table(runAll(heldVariants, v3, merchants, vectors));
+  console.log(`    bundle ${v5.version} (learned phrases + sensor):`);
+  const runs5 = runAll(heldVariants, v5, merchants, vectors);
+  table(runs5);
+  const fp5 = legit.filter((c) => runAll([{ case: c, seed: c.id, mutation: [] }], v5, merchants, vectors)[0]!.result.actual !== "ALLOW").length;
+  console.log(`\n11. Legitimate purchases held by bundle ${v5.version}: ${fp5} of ${legit.length}`);
+  const held5 = heldVariants.length - runs5.filter((r) => r.bypass).length;
+  console.log(fp5 === 0 ? `\n✔ With the sensor, ${held5} of ${heldVariants.length} never-seen attacks are held, and no legitimate purchase.` : "\n✖ The sensor holds a legitimate purchase.");
+  process.exitCode = fp5 === 0 ? 0 : 1;
 }
 
 function run() {
@@ -168,10 +208,55 @@ function learn() {
   console.log(`\nApprove with: npm run redteam -- approve ${candidate.id} --by <your name>`);
 }
 
-function approveCmd() {
+// The cases a sensor is trained and backtested on. Trained on the ledger's seeds and their
+// variants; backtested on those, the held-out wording, and the fresh attacks
+// (tests/fixtures/fresh): persuasion in wording no rule or sensor has learned from.
+async function sensorSet(bundle: RuleBundle) {
+  const ledger = readJson<Ledger>(LEDGER, emptyLedger());
+  const seeds = attacks.filter((c) => ledger.entries.some((e) => e.seed === c.id));
+  const known = expand(seeds);
+  const unseen = [...expand(seeds, HELD_OUT_PARAPHRASES), ...expand(fresh, HELD_OUT_PARAPHRASES)].filter((v) => !known.some((k) => k.case.id === v.case.id));
+  const embedder = await loadEmbedder();
+  const cases = [...legit, ...attacks, ...known.map((v) => v.case), ...unseen.map((v) => v.case)];
+  const vectors: SensorVectors = await vectorsFor(embedder, cases, bundle);
+  return { embedder, known, unseen, vectors, set: [...backtestSet(known), ...unseen] };
+}
+
+async function sensorCmd() {
+  const bundle = loadRuleBundle(BUNDLE);
+  const { embedder, known, vectors, set } = await sensorSet(bundle);
+  // Trained on the attacks the ledger knows; the held-out wording is only in the backtest.
+  const positives = caseTexts(known.map((v) => v.case).filter((c) => c.expected.decision !== "ALLOW"), bundle);
+  const draft = await trainSensor(embedder, positives, negatives(COPY, BENIGN), "SEN.PERSUASION.X");
+  const id = `SEN.PERSUASION.${hashCanonical(draft.sensor.weights).slice(0, 8).toUpperCase()}`;
+  const sensor: ClaimSensor = { ...draft.sensor, id };
+  const test = backtest(bundle, sensor, set, merchants, vectors);
+  writeJson(SENSOR, { sensor, backtest: test } satisfies { sensor: ClaimSensor; backtest: Backtest });
+  const cal = sensor.learned.calibration;
+  console.log(`Sensor ${id}: ${embedder.model.name} + logistic regression, ${sensor.learned.positives} attack claims, ${sensor.learned.negatives} ordinary texts`);
+  console.log(`threshold ${sensor.threshold}: above all ${cal.negatives} held-out ordinary texts (highest ${cal.max_score})`);
+  console.log(`Backtest against bundle ${bundle.version}:`);
+  printBacktest(test);
+  console.log(`\nApprove with: npm run redteam -- approve ${id} --by <your name>`);
+}
+
+async function approveSensorCmd(id: string, by: string) {
+  const saved = readJson<{ sensor: ClaimSensor } | null>(SENSOR, null);
+  if (saved?.sensor.id !== id) throw new Error(`no sensor ${id} in redteam/data/sensor-candidate.json`);
+  const bundle = loadRuleBundle(BUNDLE);
+  const { vectors, set } = await sensorSet(bundle);
+  const test = backtest(bundle, saved.sensor, set, merchants, vectors);
+  printBacktest(test);
+  const next = approveSensor(bundle, saved.sensor, test, by);
+  writeBundle(BUNDLE, next);
+  console.log(`\n${id} approved by ${by}: bundle ${bundle.version} → ${next.version}, sensor in shadow. Enforce with: npm run redteam -- enforce ${id} --by <name>`);
+}
+
+async function approveCmd() {
   const id = args[1];
   const by = flag("--by");
   if (!id || !by) throw new Error("usage: approve <rule-id> --by <name>");
+  if (id.startsWith("SEN.")) return approveSensorCmd(id, by);
   const candidate = readJson<Candidate[]>(CANDIDATES, []).find((c) => c.id === id);
   if (!candidate) throw new Error(`no candidate ${id} in redteam/data/candidates.json`);
   const bundle = loadRuleBundle(BUNDLE);
@@ -195,14 +280,14 @@ function enforceCmd() {
   console.log(`${id} enforced by ${by}: bundle ${bundle.version} → ${next.version}`);
 }
 
-const commands: Record<string, () => void> = { demo, run, learn, approve: approveCmd, enforce: enforceCmd };
+const commands: Record<string, () => void | Promise<void>> = { demo, run, learn, sensor: sensorCmd, approve: approveCmd, enforce: enforceCmd };
 const command = commands[args[0] ?? ""];
 if (!command) {
   console.error(`usage: npm run redteam -- <${Object.keys(commands).join("|")}>`);
   process.exitCode = 1;
 } else {
   try {
-    command();
+    await command();
   } catch (e) {
     console.error(`✖ ${(e as Error).message}`);
     process.exitCode = 1;

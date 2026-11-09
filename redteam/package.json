@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@mwf/core": "0.0.0",
-    "@mwf/tests": "0.0.0"
+    "@mwf/tests": "0.0.0",
+    "@mwf/sensors": "0.0.0"
   }
 }

@@ -208,6 +208,28 @@ MWF is a check-and-record layer: it never executes an action, never calls the ou
 4. **Injection classifier** (off-the-shelf DeBERTa or Prompt Guard; check the license) on untrusted spans at checkpoint 2, REVIEW only. Same calibration.
 5. Wire both into the decision engine as tighten-only signals.
    - *Done when:* harness shows the semantic signals reduce ASR for persuasion / fake compliance without pushing legitimate false positives over target; p99 latency per call under 50 ms on a laptop CPU.
+6. **Status 2026-11-10: the persuasion sensor is built; it is a candidate, not yet approved.** Details in [redteam/README.md](../redteam/README.md#embedding-sensor-m7).
+   - **Changed from the plan:**
+     - No Python sidecar. The model runs in-process with transformers.js and ONNX Runtime (`packages/sensors`). The stack is all TypeScript, and the machines here have no Python 3.12/3.13 for the ML wheels.
+     - The vectors are computed before the decision. The engine stays synchronous and does only the dot product.
+   - **What it is:**
+     - `all-MiniLM-L6-v2` (Apache-2.0, 8-bit ONNX), pinned by revision and file hash, plus a logistic regression the red team trains.
+     - It scores only claims about the bought item on untrusted pages, with the item's name taken out.
+     - It lives in the bundle as `claim_sensors`: REVIEW only, shadow → enforced, human-approved. If an enforced sensor cannot score a claim, that claim is held (`SEN.UNAVAILABLE`).
+     - Each decision record carries the scores and the model hash.
+   - **Threshold:**
+     - Set above every held-out ordinary text: 108 texts, half of a hand-written product-copy corpus plus the benign corpus.
+     - 108 texts cannot show 1 in 200; the 52 legitimate purchases are the other check.
+   - **Results:**
+     - Demo: on 5 never-seen seeds and their 135 mutations, 101 got through with learned phrases only. With the sensor, 27 get through, and 0 of 52 legitimate purchases are held.
+     - Fresh attacks (`tests/fixtures/fresh`, wording no learner saw, kept out of the battery): the enforced rule lets all 300 variants through, and the sensor catches 93 (2 of 10 seeds).
+     - Ordinary marketing ("one of our most popular products this season") scores close to real persuasion, and that limits the threshold.
+     - p99 is 4.7 ms per claim on a laptop CPU.
+   - **Not done:**
+     - intent ↔ cart similarity (item 2)
+     - the injection classifier (item 4)
+     - a larger negative corpus from real pages
+     - approval of `SEN.PERSUASION.F0B2BBF9`
 
 ## M8 — Red team and learning loop (Nov 8–11)
 

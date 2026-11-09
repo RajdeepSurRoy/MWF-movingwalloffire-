@@ -160,6 +160,10 @@ export const DecisionRecord = z.strictObject({
   graph_path: z.array(z.string()),
   // What learned rules still in shadow would have added. Recorded for review; not the decision.
   shadow_reasons: z.array(Reason).optional(),
+  // Embedding-sensor scores for claims about the bought items (null: could not score).
+  sensor_scores: z
+    .array(z.strictObject({ sensor_id: z.string(), model_sha256: z.string(), ref: z.string(), sku: z.string(), score: z.number().nullable() }))
+    .optional(),
   created_at: z.iso.datetime(),
 });
 export type DecisionRecord = z.infer<typeof DecisionRecord>;

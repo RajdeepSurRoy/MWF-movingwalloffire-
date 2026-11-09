@@ -39,3 +39,6 @@ data/
 !redteam/data/
 *.db-wal
 *.db-shm
+
+# Downloaded model files (sensors)
+.cache/

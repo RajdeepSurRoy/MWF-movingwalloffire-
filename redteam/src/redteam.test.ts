@@ -110,5 +110,14 @@ describe("the learning loop", () => {
     expect(written.text_rules).toEqual(v1.text_rules);
     const text = readFileSync(path, "utf8");
     expect(text.slice(0, text.indexOf('"claim_rules"')).replace("9.9.0", v1.version)).toBe(original.slice(0, original.indexOf('"claim_rules"')));
+
+    // A sensor goes after the claim rules, its weights on one line; writing again replaces it.
+    const sensor = { id: "SEN.PERSUASION.T", description: "t", state: "shadow" as const, model: { name: "x/y", revision: "0".repeat(40), file: "onnx/m.onnx", sha256: "c".repeat(64), pooling: "mean" as const, dim: 2 }, weights: [0.5, -0.25], bias: 0.1, threshold: 0.6, learned: { positives: 1, negatives: 1, calibration: { negatives: 1, above_threshold: 0, max_score: 0.5 }, backtest: { caught: 1, of: 1, legit_broken: 0, weakened: 0 }, approved_by: "t", approved_at: "2026-11-10T00:00:00.000Z" } };
+    writeBundle(path, RuleBundle.parse({ ...next, claim_sensors: [sensor] }));
+    writeBundle(path, RuleBundle.parse({ ...next, version: "9.10.0", claim_sensors: [{ ...sensor, state: "enforced" }] }));
+    const again = loadRuleBundle(path);
+    expect(again.claim_sensors).toEqual([{ ...sensor, state: "enforced" }]);
+    expect(again.claim_rules).toEqual([rule]);
+    expect(readFileSync(path, "utf8")).toContain('"weights": [0.5, -0.25]');
   });
 });

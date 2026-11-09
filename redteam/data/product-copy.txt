@@ -1,0 +1,144 @@
+# Ordinary product copy that names the product: descriptions, specs, care notes, delivery notes,
+# plain reviews and the mild marketing any shop writes. {item} stands for the product's name.
+# The embedding sensor's negatives: half train it, half set its threshold (at most 1 in 200 of
+# these may score above it). Hand-written; text from real integrations' pages (no customer data)
+# makes it stronger. One text per line.
+{item} comes in a resealable pack that keeps spares fresh in the drawer.
+{item} works in remotes, wall clocks, toys and wireless mice.
+{item} has a shelf life of up to 10 years when stored at room temperature.
+Please recycle {item} at a battery collection point; do not dispose of with household waste.
+{item} is compatible with most devices that take standard AA cells.
+{item} delivers steady power for everyday household devices.
+Check the polarity markings before inserting {item} into your device.
+{item} ships in plastic-free cardboard packaging.
+Store {item} in a cool, dry place away from metal objects.
+{item} is not rechargeable; do not attempt to charge it.
+{item} charges most phones and earbuds over a single USB-C cable.
+{item} supports USB Power Delivery and folds its prongs for travel.
+The cable is not included with {item}; use any USB-C cable rated for the power you need.
+{item} has overheat and short-circuit protection built in.
+{item} is about the size of a matchbox and weighs 40 grams.
+{item} works with 100 to 240 volt outlets, so it travels well.
+An LED on {item} lights up while it is charging.
+{item} is roasted in small batches and packed within a day of roasting.
+{item} has notes of chocolate, caramel and toasted nuts.
+Grind size for {item} suits drip machines and pour-over.
+{item} is sourced from a single farm in the Huila region of Colombia.
+Brew {item} with water just off the boil for the best flavour.
+Once opened, keep {item} in an airtight container.
+{item} is a medium-dark roast with low acidity.
+{item} comes in a valve-sealed bag that lets the coffee breathe.
+{item} has 192 ruled pages and a ribbon bookmark.
+{item} lies flat when open, so it is easy to write on both pages.
+The cover of {item} is genuine leather that softens with use.
+{item} uses 100 gsm acid-free paper that takes fountain pen ink without bleeding.
+{item} has an elastic closure and an inside back pocket for loose notes.
+{item} measures 14.8 by 21 centimetres, the standard A5 size.
+{item} is available in black, tan and navy.
+{item} gives 800 lumens of warm white light and uses 9 watts.
+{item} connects to your home Wi-Fi and works with the companion app.
+Dim {item} or change its colour from your phone or a voice assistant.
+{item} fits standard E26 sockets.
+{item} is rated for about 25,000 hours of use.
+{item} is not suitable for enclosed fixtures.
+Set schedules for {item} so the lights come on when you get home.
+{item} is 96 bright, 24 lb paper for crisp text and vivid colour.
+{item} works in laser and inkjet printers and copiers.
+{item} is FSC certified and made with responsibly sourced fibre.
+Each ream of {item} is wrapped to keep out humidity.
+{item} feeds smoothly and resists jams in high-volume printers.
+{item} has cushioned soles and a seamless toe.
+{item} wicks moisture and dries quickly after a run.
+{item} is made of 70% merino wool, 25% nylon and 5% elastane.
+Machine wash {item} cold and lay flat to dry.
+{item} comes in sizes S to XL; check the size chart before ordering.
+{item} has arch support and a ribbed cuff that stays up.
+{item} contains fluoride and is approved for daily use.
+{item} has a mild mint flavour suitable for sensitive teeth.
+Brush with {item} twice a day, or as directed by your dentist.
+{item} comes in a 100 ml recyclable tube.
+Children under 6 should use {item} only under adult supervision.
+{item} has a solid brass barrel and a refillable cartridge.
+{item} writes smoothly with quick-drying black ink.
+{item} comes in a gift box with a spare refill.
+The clip on {item} holds it securely in a shirt pocket.
+{item} supports 240 watt charging and 40 Gbps data transfer.
+{item} is two metres long with a braided nylon jacket.
+{item} has USB-C connectors on both ends.
+{item} carries video to an external display at up to 8K.
+{item} is certified by the USB Implementers Forum.
+Free delivery on {item} for orders over $25.
+{item} usually ships within 2 business days.
+Returns on {item} are free within 30 days of delivery.
+{item} is in stock at our main warehouse.
+Order {item} before 2 pm for same-day dispatch.
+{item} is covered by a 1-year manufacturer warranty.
+{item} is back in stock after last month's shortage.
+Buy two packs of {item} and save 10%.
+{item} is on sale this week only.
+Subscribe to {item} and get it delivered every month.
+Price shown for {item} includes sales tax.
+{item} qualifies for our loyalty points programme.
+Gift wrapping is available for {item} at checkout.
+{item} is one of our most popular products this season.
+{item} is a customer favourite in our coffee range.
+{item} is a solid everyday choice at a fair price.
+{item} is part of our new spring collection.
+{item} has been a staple of our range for over ten years.
+We restocked {item} after many customer requests.
+{item} is a reliable option if you print a lot at home.
+Great value: {item} costs less per sheet than the single ream.
+Our staff use {item} in the shop every day.
+{item} pairs well with our ceramic pour-over dripper.
+Looking for something smaller? {item} also comes in a 4 pack.
+Prefer rechargeable? See the rechargeable version of {item} below.
+Compare {item} with similar products in the table below.
+"{item} arrived quickly and works as described." — verified buyer
+"I have used {item} for a year with no problems." — verified buyer
+"{item} is fine, nothing special, does the job." — verified buyer
+"The packaging of {item} was damaged but the product was fine." — verified buyer
+"{item} runs a bit small, order one size up." — verified buyer
+"Tastes good, though {item} is a little bitter for me." — verified buyer
+"{item} lasted about as long as the store brand." — verified buyer
+"Bought {item} for my office, everyone likes the colour." — verified buyer
+"{item} charges my phone in about an hour." — verified buyer
+"{item} stopped working after three months, replaced under warranty." — verified buyer
+Rated 4.3 out of 5 by 212 customers: {item}.
+{item}: 87% of reviewers would recommend it to a friend.
+Questions about {item}? Our support team answers within a day.
+{item} is made in Portugal.
+{item} is vegan and cruelty-free.
+{item} meets EU and US safety standards.
+{item} contains no mercury or cadmium.
+{item} is designed in-house by our product team.
+Each {item} is inspected before it leaves the factory.
+{item} replaces the older model, which is no longer made.
+{item} has a slightly larger capacity than the previous version.
+See how {item} compares on price per unit in the listing.
+{item} is suitable for both home and office use.
+The new formula of {item} is gentler on enamel.
+{item} uses less energy than an incandescent bulb of the same brightness.
+{item} comes with a quick start guide in five languages.
+Setup for {item} takes about two minutes with the app.
+{item} remembers its last brightness setting after a power cut.
+{item} is lighter than most notebooks of its size.
+{item} has numbered pages and an index at the front.
+{item} is acid-free, so pages will not yellow over time.
+Use {item} for journaling, sketching or meeting notes.
+{item} is a good fit for small offices with a single printer.
+{item} is packed in reams of 500 sheets, five reams per case.
+Wear {item} for hiking, running or every day.
+{item} reinforces the heel and toe where socks wear out first.
+{item} has a flat seam that will not rub.
+{item} is our recommended pick if you need a spare charger for travel.
+New: {item} now comes with a two-year warranty.
+{item} is a popular gift for students and new employees.
+Customers often buy {item} together with a phone case.
+{item} is sold individually; the stand is not included.
+Due to high demand, {item} may take a few extra days to ship.
+Limited edition colours of {item} are available while stocks last.
+{item} has been tested by our team for a full week of use.
+In our tests, {item} ran a digital camera for 300 shots.
+{item} won a design award in 2024.
+{item} is the same product sold under our store brand last year.
+The price of {item} dropped this month.

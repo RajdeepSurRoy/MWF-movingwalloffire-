@@ -1,4 +1,4 @@
-import { type MerchantRecord, PaymentArgs, type RuleBundle, type TestCase, analyzeContext, findClaims, hashCanonical } from "@mwf/core";
+import { type MerchantRecord, PaymentArgs, type RuleBundle, type SensorVectors, type TestCase, analyzeContext, findClaims, hashCanonical } from "@mwf/core";
 import { type CaseResult, runCase } from "@mwf/tests/harness";
 import { PARAPHRASES, type Variant, mutate } from "./mutate.js";
 
@@ -55,8 +55,8 @@ export function rootCause(c: TestCase, bundle: RuleBundle): RootCause {
   return { template: "unexplained" };
 }
 
-export function runOne(c: TestCase, seed: string, mutation: string[], bundle: RuleBundle, merchants: MerchantRecord[]): Run {
-  const result = runCase(c, merchants, undefined, bundle);
+export function runOne(c: TestCase, seed: string, mutation: string[], bundle: RuleBundle, merchants: MerchantRecord[], sensors?: SensorVectors): Run {
+  const result = runCase(c, merchants, undefined, bundle, sensors);
   const bypass = isBypass(c, result);
   return { case: c, seed, mutation, result, bypass, ...(bypass && { root: rootCause(c, bundle) }) };
 }
@@ -71,8 +71,8 @@ export function expand(seeds: TestCase[], paraphrases: string[] = PARAPHRASES): 
   return out;
 }
 
-export function runAll(variants: Variant[], bundle: RuleBundle, merchants: MerchantRecord[]): Run[] {
-  return variants.map((v) => runOne(v.case, v.seed, v.mutation, bundle, merchants));
+export function runAll(variants: Variant[], bundle: RuleBundle, merchants: MerchantRecord[], sensors?: SensorVectors): Run[] {
+  return variants.map((v) => runOne(v.case, v.seed, v.mutation, bundle, merchants, sensors));
 }
 
 // Level 1 of learning: the exact attack. The same page and action again is the same attack.

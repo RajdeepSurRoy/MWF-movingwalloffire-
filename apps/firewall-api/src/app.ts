@@ -24,6 +24,8 @@ import {
   checkIntent,
   checkOutput,
   getDefaultBundle,
+  sensorTexts,
+  type SensorVectors,
   hashCanonical,
   intentGraph,
   toCents,
@@ -79,11 +81,16 @@ const secret = (prefix: string) => prefix + randomBytes(32).toString("base64url"
 // failures are reports with ok: false. Without one, pages get the static visibility check only.
 export type Render = (item: ContextItem) => Promise<RenderReport>;
 
+// Embeds claim texts for the bundle's embedding sensors (see @mwf/sensors). Must not throw; texts
+// it could not embed are left out, and an enforced sensor then holds the claim for REVIEW.
+export type Embed = (texts: string[]) => Promise<SensorVectors>;
+
 export function buildApp({
   db = openDatabase(":memory:"),
   bundle = getDefaultBundle(),
   render,
-}: { db?: DatabaseSync; bundle?: RuleBundle; render?: Render } = {}) {
+  embed,
+}: { db?: DatabaseSync; bundle?: RuleBundle; render?: Render; embed?: Embed } = {}) {
   const app = Fastify({ logger: false, bodyLimit: 1_048_576 });
   const ledger = new Ledger(db);
 
@@ -102,12 +109,12 @@ export function buildApp({
 
   // Every /v1 route lives in this plugin, so its auth hook applies to the matched routes
   // whatever the URL encoding. Routes outside it (only /healthz) are public.
-  app.register(async (v1) => v1Routes(v1, db, ledger, bundle, render), { prefix: "/v1" });
+  app.register(async (v1) => v1Routes(v1, db, ledger, bundle, render, embed), { prefix: "/v1" });
 
   return app;
 }
 
-function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle: RuleBundle, render: Render | undefined) {
+function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle: RuleBundle, render: Render | undefined, embed: Embed | undefined) {
   v1.addHook("onRequest", async (req, reply) => {
     const tenant = authenticate(db, req.headers.authorization);
     if (!tenant) return reply.code(401).send({ error: "unauthorized" });
@@ -203,10 +210,11 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
       reasons: result.reasons,
       policy_version: POLICY_VERSION,
       rule_bundle_version: bundle.version,
-      model_hashes: {},
+      model_hashes: Object.fromEntries((result.sensor_scores ?? []).map((s) => [s.sensor_id, s.model_sha256])),
       action_hash: actionHash,
       graph_path: result.path ?? [],
       ...(result.shadow && { shadow_reasons: result.shadow }),
+      ...(result.sensor_scores && { sensor_scores: result.sensor_scores }),
       created_at: new Date().toISOString(),
     };
     ledger.append("decision", rec);
@@ -274,6 +282,10 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     const session = loadSession(tenantId, body.session_id);
     const actionHash = hashCanonical(body.action);
     const context = loadContext(body.session_id);
+    // Embedding sensors: vectors for the claims about the bought items, computed before the
+    // (synchronous) decision. Without an embedder an enforced sensor holds those claims.
+    const texts = sensorTexts({ context: context.items, action: body.action }, bundle);
+    const sensors = texts.length && embed ? await embed(texts) : undefined;
     const result = checkAction(
       {
         mandate: session.mandate,
@@ -286,6 +298,7 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
         canaries: session.canaries,
         spentCents: spentCents(body.session_id, actionHash, new Date().toISOString()),
         priorRisk: session.risk,
+        ...(sensors && { sensors }),
       },
       bundle,
     );

@@ -5,7 +5,7 @@
 //   npm run harness -- --render          also render every page in headless Chromium
 import { writeFileSync } from "node:fs";
 import { PageRenderer } from "@mwf/render";
-import { type CaseResult, loadCases, loadMerchants, renderCase, runCase, summarize } from "./harness.js";
+import { type CaseResult, harnessSensors, loadCases, loadMerchants, renderCase, runCase, summarize } from "./harness.js";
 
 const args = process.argv.slice(2);
 const jsonPath = args.includes("--json") ? args[args.indexOf("--json") + 1] : undefined;
@@ -15,9 +15,10 @@ const render = args.includes("--render");
 const merchants = loadMerchants();
 const results: CaseResult[] = [];
 const renderer = render ? new PageRenderer() : undefined;
+const sensors = await harnessSensors(loadCases());
 try {
   for (const c of loadCases()) {
-    results.push(runCase(c, merchants, renderer && (await renderCase(c, (item) => renderer.renderItem(item)))));
+    results.push(runCase(c, merchants, renderer && (await renderCase(c, (item) => renderer.renderItem(item))), undefined, sensors));
   }
 } finally {
   await renderer?.close();

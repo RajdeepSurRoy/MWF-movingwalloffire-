@@ -67,6 +67,42 @@ export const RuleBundle = z.strictObject({
       }),
     )
     .default([]),
+  // Embedding sensors (M7, claims.ts): a linear classifier over a pinned sentence-embedding model
+  // that scores claims about a bought item for persuasion, so wording no learned phrase covers is
+  // still caught. Like claim rules they only ever hold for REVIEW, run in shadow first, and carry
+  // weights only: no page text. The model is named by revision and file hash; vectors from any
+  // other model are not used.
+  claim_sensors: z
+    .array(
+      z
+        .strictObject({
+          id: z.string().regex(/^SEN\.[A-Z0-9_.]+$/),
+          description: z.string().max(300),
+          state: z.enum(["shadow", "enforced"]),
+          model: z.strictObject({
+            name: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
+            revision: z.string().regex(/^[0-9a-f]{40}$/),
+            file: z.string().regex(/^[\w./-]+\.onnx$/),
+            sha256: z.string().regex(/^[0-9a-f]{64}$/),
+            pooling: z.enum(["mean", "cls"]),
+            dim: z.number().int().positive().max(4096),
+          }),
+          weights: z.array(z.number().finite()),
+          bias: z.number().finite(),
+          threshold: z.number().gt(0).lt(1),
+          learned: z.strictObject({
+            positives: z.number().int(),
+            negatives: z.number().int(),
+            // Negatives held out from training; the threshold sits above every one of them.
+            calibration: z.strictObject({ negatives: z.number().int(), above_threshold: z.number().int(), max_score: z.number() }),
+            backtest: z.strictObject({ caught: z.number().int(), of: z.number().int(), legit_broken: z.number().int(), weakened: z.number().int() }),
+            approved_by: z.string().max(80),
+            approved_at: z.iso.datetime(),
+          }),
+        })
+        .refine((s) => s.weights.length === s.model.dim, "weights must have one value per embedding dimension"),
+    )
+    .default([]),
 });
 export type RuleBundle = z.infer<typeof RuleBundle>;
 

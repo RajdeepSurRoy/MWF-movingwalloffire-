@@ -245,7 +245,7 @@ Shadow mode (log only) ──► canary (one tenant) ──► enforce
 - **Poisoning is an attack:** only confirmed feedback goes into training; feedback is rate-limited and weighted by the reporting tenant's trust.
 - **Built so far (M8, [redteam/](../redteam/README.md)):**
   - The mutation engine, runner, attack ledger and the four levels.
-  - Level 3 uses word trigrams until M7's embeddings exist.
+  - Level 3 groups families by word trigrams. M7 adds an embedding sensor that reads the meaning of a claim, so new wording is caught too (`claim_sensors` in the bundle, REVIEW only).
   - Learned **claim rules** in the bundle: phrases and fingerprints, REVIEW only, with no page text in them.
   - Backtest; shadow (`shadow_reasons` in the decision ledger) → enforce, each step human-approved.
   - Not built yet: canary per tenant, and automatic moves to REVIEW.
@@ -385,7 +385,7 @@ One compromised rule bundle could block or allow traffic across every customer, 
 **Decided 2026-11-02 (M0), for Rajdeep to confirm:**
 
 - **Stack:** TypeScript end to end on Node 24 — npm workspaces monorepo, Fastify for the firewall API, Next.js for the shop and console, SQLite for storage, Vitest for tests.
-- **Neural components:** Python sidecar (FastAPI + sentence-transformers / ONNX Runtime) on Python 3.12/3.13.
+- **Neural components:** ~~Python sidecar (FastAPI + sentence-transformers / ONNX Runtime) on Python 3.12/3.13.~~ Changed in M7 (2026-11-10): transformers.js + ONNX Runtime inside Node (`packages/sensors`). The stack stays all TypeScript, and a claim takes about 5 ms at p99 on a laptop CPU.
 - **Policy rules (Phase 0):** versioned JSON evaluated by a small TypeScript engine; move to Cedar or OPA/Rego in Phase 1.
 
 **Open:**

@@ -6,6 +6,7 @@ import type { RenderReports } from "./rendered.js";
 import { type Graph, actionGraph, actionId, contextGraph, taintPaths } from "./provenance.js";
 import { type Finding, analyzeContext, scanText } from "./scan.js";
 import { checkClaims } from "./claims.js";
+import { type SensorScore, type SensorVectors, checkSensors } from "./sensors.js";
 import {
   type ContextItem,
   type DecisionResult,
@@ -23,7 +24,9 @@ import {
 // 1.4: commit checks what the outside system actually prepared (two-phase commit; payments first).
 // 1.5: learned claim rules from the red team (REVIEW only; shadow rules recorded, not enforced).
 //      Text the parser splits at entities is read as one text.
-export const POLICY_VERSION = "1.5.0";
+// 1.6: embedding sensors score claims about a bought item (REVIEW only; an enforced sensor that
+//      cannot score a claim holds the action).
+export const POLICY_VERSION = "1.6.0";
 
 export interface EngineResult extends DecisionResult {
   // Context findings behind the decision, and how much they add to the session risk score.
@@ -36,6 +39,8 @@ export interface EngineResult extends DecisionResult {
   // What learned rules still in shadow would have added. Recorded for the backtest and the
   // console; never part of the decision.
   shadow?: Reason[];
+  // Embedding-sensor scores for the claims about the action's items, with the model hash.
+  sensor_scores?: SensorScore[];
 }
 
 const reason = (rule_id: string, message: string, ref?: string): Reason =>
@@ -122,6 +127,8 @@ export interface ActionCheckInput {
   quarantined?: string[];
   // Headless-browser views of the context items, keyed by item hash. Missing: static scan only.
   renders?: RenderReports;
+  // Embedding vectors for the claim texts (sensorTexts), when the bundle has a sensor.
+  sensors?: SensorVectors;
 }
 
 function checkPayment(input: ActionCheckInput, bundle: RuleBundle, block: Reason[], review: Reason[]) {
@@ -256,6 +263,9 @@ export function checkAction(input: ActionCheckInput, bundle = getDefaultBundle()
   // Learned claim rules: the item bought is the one an untrusted page talked the agent into.
   const claims = checkClaims(input.context, analyses.map((a) => a.texts ?? []), action, bundle);
   review.push(...claims.enforced);
+  const sensed = checkSensors(input.context, analyses.map((a) => a.texts ?? []), action, bundle, input.sensors);
+  review.push(...sensed.enforced);
+  const shadow = [...claims.shadow, ...sensed.shadow];
 
   const risk = findingRisk(findings, bundle);
   const total = (input.priorRisk ?? 0) + risk;
@@ -264,7 +274,7 @@ export function checkAction(input: ActionCheckInput, bundle = getDefaultBundle()
   }
   const result = combine(block, review, findings, risk);
   const path = result.decision === "ALLOW" ? undefined : paths[0]?.nodes;
-  return { ...result, graph, ...(path && { path }), ...(claims.shadow.length > 0 && { shadow: claims.shadow }) };
+  return { ...result, graph, ...(path && { path }), ...(shadow.length > 0 && { shadow }), ...(sensed.scores.length > 0 && { sensor_scores: sensed.scores }) };
 }
 
 // ---------------------------------------------------------------------------

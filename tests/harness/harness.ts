@@ -7,12 +7,14 @@ import {
   type RenderReport,
   type RenderReports,
   type RuleBundle,
+  type SensorVectors,
   type TestCase,
   TestCase as TestCaseSchema,
   checkAction,
   checkCommit,
   getDefaultBundle,
   hashCanonical,
+  sensorTexts,
 } from "@mwf/core";
 
 export const FIXTURES_DIR = join(import.meta.dirname, "..", "fixtures");
@@ -52,7 +54,7 @@ export interface CaseResult {
 // The check runs first; only an ALLOW goes on to commit, as in production.
 // `renders`: headless-browser views of the case's pages (see renderCase); omitted, static scan only.
 // `bundle`: the rule bundle to decide with (the red team backtests candidate bundles).
-export function runCase(c: TestCase, merchants: MerchantRecord[] = loadMerchants(), renders?: RenderReports, bundle: RuleBundle = getDefaultBundle()): CaseResult {
+export function runCase(c: TestCase, merchants: MerchantRecord[] = loadMerchants(), renders?: RenderReports, bundle: RuleBundle = getDefaultBundle(), sensors?: SensorVectors): CaseResult {
   const base = { id: c.id, category: c.category, expected: c.expected.decision };
   const check = checkAction({
     mandate: c.mandate,
@@ -61,6 +63,7 @@ export function runCase(c: TestCase, merchants: MerchantRecord[] = loadMerchants
     now: new Date(c.now),
     merchants,
     ...(renders && { renders }),
+    ...(sensors && { sensors }),
   }, bundle);
   const shadow = check.shadow ? { shadow: check.shadow } : {};
   if (check.decision !== "ALLOW") return { ...base, actual: check.decision, decidedAt: "action", reasons: check.reasons, ...shadow };
@@ -126,4 +129,15 @@ export function summarize(results: CaseResult[]): Report {
     byCategory: [...byCategory.values()].sort((a, b) => (a.category === "legit" ? -1 : b.category === "legit" ? 1 : a.category.localeCompare(b.category))),
     mismatches: results.filter((r) => r.actual !== r.expected),
   };
+}
+
+// Vectors for every claim in `cases`, when the bundle has an embedding sensor; undefined when it
+// has none. Loads the pinned model (downloaded on first use).
+export async function harnessSensors(cases: TestCase[], bundle: RuleBundle = getDefaultBundle()): Promise<SensorVectors | undefined> {
+  if (bundle.claim_sensors.length === 0) return undefined;
+  const { loadEmbedder } = await import("@mwf/sensors");
+  const embedder = await loadEmbedder(bundle.claim_sensors[0]!.model);
+  const texts = [...new Set(cases.flatMap((c) => sensorTexts(c, bundle)))];
+  const vs = await embedder.embed(texts);
+  return { model_sha256: embedder.model.sha256, vectors: new Map(texts.map((t, i) => [t, vs[i]!])) };
 }

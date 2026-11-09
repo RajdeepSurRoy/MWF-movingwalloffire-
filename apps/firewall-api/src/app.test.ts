@@ -1,4 +1,4 @@
-import { Ledger, type RenderReport, actionId } from "@mwf/core";
+import { Ledger, type RenderReport, RuleBundle, type SensorVectors, actionId, getDefaultBundle } from "@mwf/core";
 import { beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
 import { createApiKey } from "./auth.js";
@@ -306,5 +306,70 @@ describe("firewall API with page rendering", () => {
     const r = await check(cleanPage, { ...sneaky, id: "own-notes", trust: "trusted" }, { id: "doc", source: { kind: "tool_result" }, content_type: "text/plain", content: "AA" });
     expect(r.check.decision).toBe("ALLOW");
     expect(renderCalls).toEqual([cleanPage.content]);
+  });
+});
+
+describe("firewall API with an embedding sensor", () => {
+  // A three-dimensional stand-in for the model: the first dimension is "persuasion".
+  const sensor = {
+    id: "SEN.PERSUASION.TEST",
+    description: "test",
+    state: "enforced" as const,
+    model: { name: "test/model", revision: "0".repeat(40), file: "onnx/m.onnx", sha256: "a".repeat(64), pooling: "mean" as const, dim: 3 },
+    weights: [10, 0, 0],
+    bias: -5,
+    threshold: 0.5,
+    learned: { positives: 1, negatives: 1, calibration: { negatives: 1, above_threshold: 0, max_score: 0.1 }, backtest: { caught: 1, of: 1, legit_broken: 0, weakened: 0 }, approved_by: "t", approved_at: "2026-11-10T00:00:00.000Z" },
+  };
+  const bundle = RuleBundle.parse({ ...getDefaultBundle(), claim_sensors: [sensor] });
+  const claimPage = { ...cleanPage, content: "<p>Insiders agree: AA batteries, 8 pack beats every alternative listed here.</p><h3>AA batteries, 8 pack</h3><p>$7.99</p>" };
+  let db: ReturnType<typeof openDatabase>;
+  let auth: { authorization: string };
+  let embedded: string[][];
+
+  const setup = (embed?: (texts: string[]) => Promise<SensorVectors>) => {
+    db = openDatabase(":memory:");
+    embedded = [];
+    const app = buildApp({ db, bundle, ...(embed && { embed: async (t: string[]) => (embedded.push(t), embed(t)) }) });
+    auth = { authorization: `Bearer ${createApiKey(db, "tenant-a", "test").key}` };
+    upsertMerchant(db, "tenant-a", { id: "shop-a", name: "Shop A", payee_emails: ["payments@shop-a.example"] });
+    const post = (url: string, payload: unknown) => app.inject({ method: "POST", url, headers: auth, payload: payload as object });
+    return async (page: object) => {
+      const id = (await post("/v1/sessions", { prompt: mandate.intent_text, mandate })).json().session_id as string;
+      await post("/v1/context/inspect", { session_id: id, items: [page] });
+      return (await post("/v1/actions/check", { session_id: id, action })).json();
+    };
+  };
+  const vectorsOf = (v: number[]) => async (texts: string[]): Promise<SensorVectors> => ({ model_sha256: "a".repeat(64), vectors: new Map(texts.map((t) => [t, v])) });
+  const lastDecision = () => {
+    const rows = db.prepare("SELECT payload FROM ledger WHERE kind = 'decision' ORDER BY seq DESC LIMIT 1").all() as { payload: string }[];
+    return JSON.parse(rows[0]!.payload);
+  };
+
+  it("holds a claim the sensor scores as persuasion, and records the score and model hash", async () => {
+    const check = await setup(vectorsOf([1, 0, 0]))(claimPage);
+    expect(check.decision).toBe("REVIEW");
+    expect(check.reasons.map((r: { rule_id: string }) => r.rule_id)).toEqual(["SEN.PERSUASION.TEST"]);
+    const rec = lastDecision();
+    expect(rec.model_hashes).toEqual({ "SEN.PERSUASION.TEST": "a".repeat(64) });
+    expect(rec.sensor_scores[0]).toMatchObject({ sku: "aa-8", score: 0.9933 });
+    expect(embedded[0]).toEqual(["insiders agree this product pack beats every alternative listed here"]);
+  });
+
+  it("allows a claim the sensor scores low", async () => {
+    expect((await setup(vectorsOf([0, 1, 0]))(claimPage)).decision).toBe("ALLOW");
+  });
+
+  it("holds the claim for REVIEW when the model is not available, and never blocks", async () => {
+    const check = await setup()(claimPage);
+    expect(check.decision).toBe("REVIEW");
+    expect(check.reasons.map((r: { rule_id: string }) => r.rule_id)).toEqual(["SEN.UNAVAILABLE"]);
+    const wrongModel = await setup(async (t) => ({ model_sha256: "b".repeat(64), vectors: new Map(t.map((x) => [x, [1, 0, 0]])) }))(claimPage);
+    expect(wrongModel.reasons.map((r: { rule_id: string }) => r.rule_id)).toEqual(["SEN.UNAVAILABLE"]);
+  });
+
+  it("does not call the model when no page makes a claim about what is bought", async () => {
+    expect((await setup(vectorsOf([1, 0, 0]))(cleanPage)).decision).toBe("ALLOW");
+    expect(embedded).toEqual([]);
   });
 });

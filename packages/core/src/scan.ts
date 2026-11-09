@@ -251,7 +251,7 @@ function spansFrom(segments: { channel: Channel | "text"; text: string; how: str
 }
 
 // `withTexts`: also return the item's texts (ItemAnalysis.texts).
-export function analyzeContextItem(item: ContextItem, bundle: RuleBundle, render?: RenderReport, withTexts = bundle.claim_rules.length > 0): ItemAnalysis {
+export function analyzeContextItem(item: ContextItem, bundle: RuleBundle, render?: RenderReport, withTexts = bundle.claim_rules.length > 0 || bundle.claim_sensors.length > 0): ItemAnalysis {
   if (item.trust === "trusted") return { findings: [], spans: [] };
   const findings: Finding[] = [];
   const push = (f: Finding) => {

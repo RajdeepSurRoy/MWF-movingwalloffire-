@@ -1,5 +1,3 @@
-# Sensors
+# Sensors (moved)
 
-Python service for the neural sensors (embedding model, injection classifier). Sensors only score; they never decide. Built in milestone M7.
-
-Note: use Python 3.12 or 3.13 here (e.g. via `uv`); ML wheels for 3.14 may not be available yet.
+The neural sensors run inside Node with transformers.js and ONNX Runtime: see [packages/sensors](../../packages/sensors) and the embedding sensor in [redteam/README.md](../../redteam/README.md#embedding-sensor-m7). A Python sidecar was the M0 plan; M7 dropped it to keep the stack in one language.

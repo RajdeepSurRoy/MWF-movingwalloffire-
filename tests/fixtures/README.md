@@ -14,4 +14,6 @@ Ground-truth cases for the test battery (`npm run harness`). Each file is a JSON
 | `lookalike-merchant.json` | BLOCK | action check |
 | `transaction-modification.json` | BLOCK | commit (the executed action differs, or is a replay) |
 
+- `fresh/persuasion-fresh.json` — 10 persuasion attacks in new wording, **not in the battery**. No rule or sensor learns from them; the red team uses them to measure what a learned rule or sensor does with wording it never saw (`npm run redteam -- sensor`).
+
 Every case has a fixed `now`, so results do not depend on the clock. Seeded in M1 (2026-11-03); edit and add cases by hand from here on. When the red team finds a bypass (M8), it lands here as a new case.
