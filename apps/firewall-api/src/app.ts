@@ -279,13 +279,17 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
   v1.post("/actions/check", async (req) => {
     const tenantId = tenantOf(req);
     const body = CheckActionBody.parse(req.body);
-    const session = loadSession(tenantId, body.session_id);
+    loadSession(tenantId, body.session_id);
     const actionHash = hashCanonical(body.action);
-    const context = loadContext(body.session_id);
     // Embedding sensors: vectors for the claims about the bought items, computed before the
     // (synchronous) decision. Without an embedder an enforced sensor holds those claims.
-    const texts = sensorTexts({ context: context.items, action: body.action }, bundle);
+    const texts = sensorTexts({ context: loadContext(body.session_id).items, action: body.action }, bundle);
     const sensors = texts.length && embed ? await embed(texts) : undefined;
+    // Session state is read after the await, so the decision and the risk update below run with
+    // no await between them: a concurrent check cannot decide on a stale risk score. Context
+    // added meanwhile has no vectors and is held by an enforced sensor.
+    const session = loadSession(tenantId, body.session_id);
+    const context = loadContext(body.session_id);
     const result = checkAction(
       {
         mandate: session.mandate,

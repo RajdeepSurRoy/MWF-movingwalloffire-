@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SensorCache, loadEmbedder } from "./index.js";
+import { type Embedder, SensorCache, loadEmbedder } from "./index.js";
 
 // Needs the model file (downloaded on first use, ~23 MB). Set MWF_SENSORS_DOWNLOAD=0 offline:
 // the test then fails if the model is not cached, rather than passing without it.
@@ -20,5 +20,54 @@ describe("embedder", () => {
     const slow = { model: { sha256: "a".repeat(64) } as never, embed: () => new Promise<number[][]>(() => {}) };
     const v = await new SensorCache(slow).vectors(["x y z"], 20);
     expect(v.vectors.size).toBe(0);
+  });
+
+  // A stand-in model that records each batch and answers when told to.
+  const fake = () => {
+    const batches: string[][] = [];
+    const release: (() => void)[] = [];
+    const e: Embedder = {
+      model: { sha256: "a".repeat(64) } as never,
+      embed: (texts) => {
+        batches.push(texts);
+        return new Promise((ok) => release.push(() => ok(texts.map(() => [1, 0]))));
+      },
+    };
+    return { e, batches, release };
+  };
+
+  it("caps the texts and characters one call can embed", async () => {
+    const f = fake();
+    const cache = new SensorCache(f.e, 100, { textsPerCall: 2, charsPerText: 5, queued: 8 });
+    const p = cache.vectors(["aaaaaaaa", "b", "c"], 1000);
+    await Promise.resolve();
+    await Promise.resolve();
+    f.release[0]!();
+    const v = await p;
+    expect(f.batches).toEqual([["aaaaa", "b"]]);
+    expect([...v.vectors.keys()]).toEqual(["aaaaaaaa", "b"]);
+  });
+
+  it("keeps a timed-out batch's vectors, and does not embed a text twice while it runs", async () => {
+    const f = fake();
+    const cache = new SensorCache(f.e);
+    expect((await cache.vectors(["x"], 10)).vectors.size).toBe(0);
+    const again = cache.vectors(["x"], 1000);
+    f.release[0]!();
+    expect((await again).vectors.get("x")).toEqual([1, 0]);
+    expect(f.batches).toEqual([["x"]]);
+  });
+
+  it("leaves texts out at once when too many batches are waiting", async () => {
+    const f = fake();
+    const cache = new SensorCache(f.e, 100, { textsPerCall: 32, charsPerText: 1000, queued: 1 });
+    void cache.vectors(["a"], 10); // running
+    await Promise.resolve();
+    void cache.vectors(["b"], 10); // waiting: the queue is full
+    const start = Date.now();
+    const full = await cache.vectors(["c"], 5000);
+    expect(full.vectors.size).toBe(0);
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(f.batches).toEqual([["a"]]);
   });
 });

@@ -65,38 +65,73 @@ export async function loadEmbedder(model: ModelSpec = MINILM, { cacheDir = proce
 
 export const specOf = (sensor: ClaimSensor): ModelSpec => sensor.model;
 
-// Embeds `texts` for checkAction. Vectors already computed are reused. On a timeout or error the
-// vectors are left out, and an enforced sensor holds the claim for REVIEW (fail closed).
+// Bounds on the work one call can cause. Over them, texts are left out (fail closed), so a page
+// stuffed with claims cannot make the model the bottleneck for everyone.
+export const SENSOR_LIMITS = {
+  // Claim texts embedded per call; the rest are left out.
+  textsPerCall: 32,
+  // Characters of a claim the model reads (MiniLM reads 256 tokens at most anyway).
+  charsPerText: 1000,
+  // Batches waiting for the model; a call that would wait behind more is left out at once.
+  queued: 8,
+};
+
+// Embeds `texts` for checkAction. Vectors already computed are reused. Batches run one at a time,
+// so the model never works on more than one; a text already being embedded is not embedded
+// again. On a timeout, a full queue or an error the vectors are left out, and an enforced sensor
+// holds the claim for REVIEW (fail closed). A batch that times out still finishes and fills the
+// cache, so a retry is cheap.
 export class SensorCache {
   private cache = new Map<string, number[]>();
+  private inflight = new Map<string, Promise<void>>();
+  private tail: Promise<void> = Promise.resolve();
+  private waiting = 0;
   constructor(
     private embedder: Embedder,
     private max = 5000,
+    private limits = SENSOR_LIMITS,
   ) {}
 
   get model_sha256() {
     return this.embedder.model.sha256;
   }
 
-  async vectors(texts: string[], timeoutMs = 2000): Promise<SensorVectors> {
-    const missing = [...new Set(texts.filter((t) => !this.cache.has(t)))];
-    if (missing.length) {
-      let timer: NodeJS.Timeout | undefined;
+  private store(texts: string[], vs: number[][]) {
+    texts.forEach((t, i) => this.cache.set(t, vs[i]!));
+    while (this.cache.size > this.max) this.cache.delete(this.cache.keys().next().value!);
+  }
+
+  // Queues one batch behind the running one. Returns null when the queue is full.
+  private enqueue(texts: string[]): Promise<void> | null {
+    if (this.waiting >= this.limits.queued) return null;
+    this.waiting++;
+    const run = this.tail.then(async () => {
+      this.waiting--;
       try {
-        const vs = await Promise.race([
-          this.embedder.embed(missing),
-          new Promise<never>((_, fail) => (timer = setTimeout(() => fail(new Error("sensor timeout")), timeoutMs))),
-        ]);
-        missing.forEach((t, i) => this.cache.set(t, vs[i]!));
-        while (this.cache.size > this.max) this.cache.delete(this.cache.keys().next().value!);
+        this.store(texts, await this.embedder.embed(texts.map((t) => t.slice(0, this.limits.charsPerText))));
       } catch {
-        // Left out: the engine treats an unscored claim as unavailable.
+        // Left out; the engine treats an unscored claim as unavailable.
       } finally {
-        clearTimeout(timer);
+        for (const t of texts) this.inflight.delete(t);
       }
+    });
+    this.tail = run;
+    for (const t of texts) this.inflight.set(t, run);
+    return run;
+  }
+
+  async vectors(texts: string[], timeoutMs = 2000): Promise<SensorVectors> {
+    const wanted = [...new Set(texts)].slice(0, this.limits.textsPerCall);
+    const missing = wanted.filter((t) => !this.cache.has(t) && !this.inflight.has(t));
+    if (missing.length) this.enqueue(missing);
+    const pending = [...new Set(wanted.map((t) => this.inflight.get(t)).filter((p) => p !== undefined))];
+    if (pending.length) {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([Promise.all(pending), new Promise<void>((ok) => (timer = setTimeout(ok, timeoutMs)))]);
+      clearTimeout(timer);
     }
     const vectors = new Map<string, number[]>();
-    for (const t of texts) {
+    for (const t of wanted) {
       const v = this.cache.get(t);
       if (v) vectors.set(t, v);
     }
