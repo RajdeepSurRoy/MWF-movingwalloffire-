@@ -9,7 +9,8 @@ import {
   type ContextItem,
   type DecisionResult,
   type Mandate,
-  type PaymentHold,
+  PaymentEffect,
+  type PreparedEffect,
   type ProposedAction,
   type Reason,
   PaymentArgs,
@@ -18,7 +19,8 @@ import {
 // Version of the decision logic itself (this file). The rule bundle has its own version.
 // 1.1: provenance graph, cross-element matching. 1.2: encoded canaries.
 // 1.3: several categories, fees, checkout origin, session spending; a repeated signal counts once.
-export const POLICY_VERSION = "1.3.0";
+// 1.4: commit checks what the outside system actually prepared (two-phase commit; payments first).
+export const POLICY_VERSION = "1.4.0";
 
 export interface EngineResult extends DecisionResult {
   // Context findings behind the decision, and how much they add to the session risk score.
@@ -263,9 +265,9 @@ export interface CommitCheckInput {
   executedAction: ProposedAction;
   alreadyCommitted: boolean;
   expired?: boolean;
-  // Funds the provider holds for this payment, and the tenant's merchant registry to check the
-  // provider's payee against. The payee in the action came from the agent; this one from PayPal.
-  hold?: PaymentHold;
+  // What the outside system says it has prepared, and the tenant's merchant registry to check a
+  // payment's payee against. The payee in the action came from the agent; this one from the system.
+  prepared?: PreparedEffect;
   merchants?: MerchantRecord[];
 }
 
@@ -277,35 +279,58 @@ export function checkCommit(input: CommitCheckInput): EngineResult {
     block.push(reason("COMMIT.HASH_MISMATCH", "The action being executed differs from the one approved"));
   }
   const review: Reason[] = [];
-  if (input.hold) checkHold(input.hold, input.executedAction, input.merchants ?? [], block, review);
+  const ok = [reason("COMMIT.HASH_MATCH", "Executed action matches the approved hash")];
+  if (input.prepared) checkPrepared(input.prepared, input.executedAction, input.merchants ?? [], { block, review, ok });
   if (block.length) return { decision: "BLOCK", reasons: block, findings: [], risk: 0 };
   if (review.length) return { decision: "REVIEW", reasons: review, findings: [], risk: 0 };
-  const ok = [reason("COMMIT.HASH_MATCH", "Executed action matches the approved hash")];
-  if (input.hold) ok.push(reason("COMMIT.HOLD_MATCH", "The provider holds the approved amount for a registered payee"));
   return { decision: "ALLOW", reasons: ok, findings: [], risk: 0 };
 }
 
-// The hold must be live, for exactly the approved total, and payable to an address the registry
-// lists for the approved merchant. A merchant registered by checkout address only has no payee
-// to compare with, so a person decides.
-function checkHold(hold: PaymentHold, action: ProposedAction, merchants: MerchantRecord[], block: Reason[], review: Reason[]) {
+interface Verdicts {
+  block: Reason[];
+  review: Reason[];
+  ok: Reason[];
+}
+
+// One checker per action family compares what the outside system prepared with the approved
+// action. A new family gets its checker here; until then its prepared effect is recorded only.
+const EFFECT_CHECKERS: { prefix: string; check: (effect: Record<string, unknown>, action: ProposedAction, merchants: MerchantRecord[], v: Verdicts) => void }[] = [
+  { prefix: "payment.", check: checkPaymentEffect },
+];
+
+function checkPrepared(prepared: PreparedEffect, action: ProposedAction, merchants: MerchantRecord[], v: Verdicts) {
+  if (!prepared.ready) {
+    v.block.push(reason("COMMIT.EFFECT_NOT_READY", `${prepared.system} does not hold this action ready (${prepared.status ?? "not ready"})`));
+  }
+  const checker = EFFECT_CHECKERS.find((c) => action.type.startsWith(c.prefix));
+  if (checker) checker.check(prepared.effect, action, merchants, v);
+  else v.ok.push(reason("COMMIT.EFFECT_RECORDED", `No check for ${action.type} effects yet; recorded only`));
+}
+
+// The provider must take exactly the approved total, and pay an address the registry lists for
+// the approved merchant. A merchant registered by checkout address only has no payee to compare
+// with, so a person decides.
+function checkPaymentEffect(raw: Record<string, unknown>, action: ProposedAction, merchants: MerchantRecord[], v: Verdicts) {
+  const effect = PaymentEffect.safeParse(raw);
   const payment = PaymentArgs.safeParse(action.args);
-  if (!action.type.startsWith("payment.") || !payment.success) {
-    block.push(reason("COMMIT.HOLD_NOT_PAYMENT", "A payment hold was sent for an action that is not a payment"));
+  if (!effect.success || !payment.success) {
+    v.block.push(reason("COMMIT.EFFECT_INVALID", "The prepared payment does not say what amount and payee it holds"));
     return;
   }
-  if (hold.status !== "CREATED") block.push(reason("COMMIT.HOLD_NOT_AUTHORIZED", `The provider's authorization is ${hold.status}, not CREATED`));
+  const { amount, payee } = effect.data;
   const total = payment.data.total;
-  if (hold.amount.currency !== total.currency || toCents(hold.amount) !== toCents(total)) {
-    block.push(reason("COMMIT.HOLD_AMOUNT_MISMATCH", `The provider holds ${hold.amount.value} ${hold.amount.currency}, the approved total is ${total.value} ${total.currency}`));
+  if (amount.currency !== total.currency || toCents(amount) !== toCents(total)) {
+    v.block.push(reason("COMMIT.EFFECT_AMOUNT_MISMATCH", `The provider holds ${amount.value} ${amount.currency}, the approved total is ${total.value} ${total.currency}`));
   }
   const merchant = merchants.find((m) => sameId(m.id, payment.data.merchant.id));
   if (!merchant || merchant.payee_emails.length === 0) {
-    review.push(reason("COMMIT.HOLD_PAYEE_UNVERIFIED", "No registered payee to compare the provider's payee with"));
-  } else if (!hold.payee.email) {
-    review.push(reason("COMMIT.HOLD_PAYEE_UNVERIFIED", "The provider did not report the payee's email"));
-  } else if (!merchant.payee_emails.some((p) => normalizeEmail(p) === normalizeEmail(hold.payee.email!))) {
-    block.push(reason("COMMIT.HOLD_PAYEE_MISMATCH", "The provider would pay someone the registry does not list for this merchant"));
+    v.review.push(reason("COMMIT.EFFECT_PAYEE_UNVERIFIED", "No registered payee to compare the provider's payee with"));
+  } else if (!payee.email) {
+    v.review.push(reason("COMMIT.EFFECT_PAYEE_UNVERIFIED", "The provider did not report the payee's email"));
+  } else if (!merchant.payee_emails.some((p) => normalizeEmail(p) === normalizeEmail(payee.email!))) {
+    v.block.push(reason("COMMIT.EFFECT_PAYEE_MISMATCH", "The provider would pay someone the registry does not list for this merchant"));
+  } else {
+    v.ok.push(reason("COMMIT.EFFECT_MATCH", "The provider holds the approved amount for a registered payee"));
   }
 }
 

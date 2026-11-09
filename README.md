@@ -121,7 +121,7 @@ capture void      hold → human → re-check → capture / void
 - Capture: `POST /v2/payments/authorizations/{authorization_id}/capture`
 - Void: `POST /v2/payments/authorizations/{authorization_id}/void`
 - Saved payment method via **PayPal Vault** (biggest technical risk — to be spiked first). Fallback: sandbox test card.
-- **Webhooks** registered in sandbox; signatures verified before any event is trusted.
+- The capture and void calls are the **business's own code** (in the demo, `apps/agent/src/paypal/`). MWF checks what PayPal actually holds (amount, payee) before the capture, records what happened with PayPal's ids, and never calls PayPal or holds its credentials.
 - **`PayPal-Request-Id`** provides idempotency against duplicate/retry attacks — that protection is PayPal's, and we credit it as such.
 - Everything runs in the **PayPal Sandbox**. No real money.
 

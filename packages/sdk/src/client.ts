@@ -1,4 +1,4 @@
-import { type ContextItem, DecisionValue, type Mandate, type PaymentHold, type ProposedAction, Reason } from "@mwf/core";
+import { type ContextItem, DecisionValue, type Mandate, type PreparedEffect, type ProposedAction, Reason } from "@mwf/core";
 import { z } from "zod";
 
 // The HTTP client for the firewall API. Anything other than a well-formed answer is a thrown
@@ -21,15 +21,16 @@ const CheckAnswer = Verdict.extend({
   expires_at: z.string().optional(),
 });
 
-const CommitAnswer = Verdict.extend({ settle: z.enum(["capture", "void", "hold"]).optional() });
-const SettleAnswer = z.object({ recorded: z.literal(true), ledger_seq: z.number(), follows_decision: z.boolean() });
+const CommitAnswer = Verdict.extend({ next: z.enum(["execute", "cancel", "hold"]).optional() });
+const OutcomeAnswer = z.object({ recorded: z.literal(true), ledger_seq: z.number(), follows_decision: z.boolean() });
 
 export type InspectResult = z.infer<typeof InspectAnswer>;
 export type CommitResult = z.infer<typeof CommitAnswer>;
-export interface Settlement {
-  outcome: "captured" | "voided" | "held";
+// How a prepared action ended, in the outside system's own words and ids.
+export interface Outcome {
+  outcome: "executed" | "cancelled" | "held";
   status: string;
-  capture_id?: string;
+  external_ids?: Record<string, string>;
 }
 
 // What an ALLOW carries: the single-use token and the exact action it was issued for.
@@ -134,26 +135,26 @@ export class FirewallSession {
     return { ...verdict, approval };
   }
 
-  // `executed` is what is really about to run; it must hash to what was approved. For a payment,
-  // `hold` is what the provider authorized; the answer's `settle` says what to do with it.
-  commitAction(approval: Approval, executed: ProposedAction = approval.action, hold?: PaymentHold): Promise<CommitResult> {
+  // `executed` is what is really about to run; it must hash to what was approved. `prepared` is
+  // what the outside system says it has ready; the answer's `next` says whether to execute it.
+  commitAction(approval: Approval, executed: ProposedAction = approval.action, prepared?: PreparedEffect): Promise<CommitResult> {
     return this.#client.post(
       "/v1/actions/commit",
-      { session_id: this.id, action_token: approval.token, action: executed, ...(hold && { hold }) },
+      { session_id: this.id, action_token: approval.token, action: executed, ...(prepared && { prepared }) },
       CommitAnswer,
     );
   }
 
-  // Records how a committed hold ended, with the provider's ids, in the firewall's ledger.
-  settlePayment(hold: PaymentHold, settlement: Settlement) {
+  // Records how a prepared action ended, with the outside system's ids, in the firewall's ledger.
+  reportOutcome(prepared: PreparedEffect, outcome: Outcome) {
     return this.#client.post(
-      "/v1/payments/settle",
-      { session_id: this.id, provider: hold.provider, authorization_id: hold.authorization_id, ...settlement },
-      SettleAnswer,
+      "/v1/actions/outcome",
+      { session_id: this.id, system: prepared.system, reference: prepared.reference, ...outcome },
+      OutcomeAnswer,
     );
   }
 
-  // The token will not be used: its money counts against the session's budget no longer.
+  // The token will not be used: what it would spend no longer counts against the session.
   releaseAction(approval: Approval) {
     return this.#client.post("/v1/actions/release", { session_id: this.id, action_token: approval.token }, z.object({ released: z.boolean() }));
   }

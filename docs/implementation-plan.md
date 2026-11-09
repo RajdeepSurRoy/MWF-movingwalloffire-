@@ -170,31 +170,35 @@ Agent (`apps/agent`): a tool loop that validates every model call, a `Model` int
      - **PayPal wasn't used in the lab** (`WALLET_MODE=off`).
      - **The firewall-on FreshCart assistant path has been typechecked and unit-tested but not run live.**
 
-## M6 — PayPal integration (Nov 6–9)
+## M6 — Two-phase commit, shown with PayPal (Nov 6–9)
 
-1. Production-quality version of the M0 spike behind a `PaymentPlugin` that implements the generic two-phase commit: create order (AUTHORIZE, `PayPal-Request-Id`) → authorize → firewall integrity check → capture / void / hold.
-2. **REVIEW path:** authorization held; console approves → re-check → capture, or rejects → void.
-3. **Webhooks:** register in sandbox, verify signatures before trusting any event, record events in the ledger.
-4. **Cleanup:** evidence tests void anything they don't capture.
+MWF is a check-and-record layer: it never executes an action, never calls the outside system and never holds its credentials. The business keeps its own payment (or email, or database) code. M6 makes the commit checkpoint check what the outside system has **actually prepared**, not only what the agent proposed. PayPal is the hackathon's example of an outside system, not part of MWF.
+
+1. **Generic prepared effect** (`PreparedEffect` in `@mwf/core`).
+   - The integration has its system prepare the action without doing it: authorize a payment, draft an email, stage a transaction.
+   - It sends what that system reports to `/v1/actions/commit`: `{system, reference, ready, status, effect, external_ids}`.
+   - The answer's `next` says `execute`, `cancel` or `hold`.
+2. **One checker per action family**, so a new family gets its own without API changes. Payments come first:
+   - `COMMIT.EFFECT_AMOUNT_MISMATCH`: the system holds a different amount or currency.
+   - `COMMIT.EFFECT_PAYEE_MISMATCH`: the payee the system reports is not in the merchant registry, whatever payee the agent named.
+   - `COMMIT.EFFECT_NOT_READY`: the system no longer holds the action ready.
+   - `COMMIT.EFFECT_INVALID`: the effect is malformed.
+   - `COMMIT.EFFECT_REUSED`: one prepared action was already used for another approved action, checked per tenant.
+   - `COMMIT.EFFECT_PAYEE_UNVERIFIED` → REVIEW: there is no registered payee to compare with.
+   - A family with no checker yet is recorded only (`COMMIT.EFFECT_RECORDED`).
+3. **Outcome reporting.** `POST /v1/actions/outcome` records how it ended (`executed`, `cancelled`, `held`), with the system's own ids, and whether the integration followed the decision. This is the audit trail the console will show.
+4. **SDK.** The Guard takes the business's own `TwoPhase` hooks (`prepare`, `execute`, `cancel`) and only decides which one to call. It prepares only after ALLOW at the check and executes only on `next: execute`. Any failure, or no answer from the firewall, cancels.
+5. **Demo business's PayPal code** (`apps/agent/src/paypal/`, not MWF): authorize with a vaulted sandbox wallet (no buyer present), capture, void. Each step has its own `PayPal-Request-Id`. It is plugged in with `paypalTwoPhase()`.
    - *Done when:* one ALLOW (captured) and one BLOCK (voided) run end to end with sandbox IDs written to the ledger.
-5. **Status 2026-11-09: built and run offline; the sandbox run is waiting on credentials.**
-   - **Who holds what.** `PayPalPayments` (`packages/sdk/src/paypal.ts`) runs in the business's process with its own sandbox app and a vaulted buyer wallet. The firewall never holds payment credentials.
-   - **Flow.** The Guard authorizes only after ALLOW at the check, then sends PayPal's hold (order, authorization, status, amount, payee as PayPal reports them) to `/v1/actions/commit`, then captures on ALLOW, voids on BLOCK and keeps the hold on REVIEW. Any failure voids. Each step has its own `PayPal-Request-Id` derived from the token's idempotency key.
-   - **Commit checks on the hold:**
-     - `COMMIT.HOLD_AMOUNT_MISMATCH`: PayPal holds a different amount or currency.
-     - `COMMIT.HOLD_PAYEE_MISMATCH`: the payee PayPal reports is not in the merchant registry.
-     - `COMMIT.HOLD_NOT_AUTHORIZED`: the authorization is not live.
-     - `COMMIT.HOLD_REUSED`: one authorization was already used for another action (per tenant).
-     - `COMMIT.HOLD_PAYEE_UNVERIFIED` → REVIEW: there is no registered payee to compare with.
-     - This closes the "self-asserted payee" limit for payments that go through the plugin. The payee comes from PayPal's record via the integration's code, not from the model or the page.
-   - **Evidence.** `POST /v1/payments/settle` writes the authorization, capture or void with PayPal's ids to the ledger, and whether the integration followed the decision. `POST /webhooks/paypal` accepts an event only after PayPal's verify-webhook-signature confirms it. Each event is recorded once and linked to its session.
-   - **Run.** `npm run pay-demo -w @mwf/agent -- --fake` passes offline: Shop A is captured; Shop B's checkout looks right, but PayPal would pay another account, so it is voided. Without `--fake` the same run goes to the sandbox.
+6. **Status 2026-11-09: built and run offline; the sandbox run is waiting on credentials.**
+   - `npm run pay-demo -w @mwf/agent -- --fake` passes offline. Shop A is captured. Shop B's checkout looks right, but PayPal would pay another account, so it is voided. Both are in the ledger with PayPal's ids. Without `--fake` the same run goes to the sandbox.
+   - Closes the "self-asserted payee" limit for integrations that use the two-phase commit. The payee comes from the provider's record, copied by the integration's code, not from the model or a page.
    - **Not done:**
      - the sandbox run (needs `PAYPAL_CLIENT_ID`/`SECRET`, `PAYPAL_PAYEE_EMAIL` and the Vault spike's buyer approval)
-     - webhook registration
-     - the console approve/reject for REVIEW holds (M9)
-     - FreshCart and Errand still pay through their own PayPal code, not this plugin
-     - a forged webhook still costs one call to PayPal's verify API; there is no rate limit yet
+     - console approve/reject for held actions (M9)
+     - checkers for other action families
+     - FreshCart and Errand don't send prepared effects yet
+   - **Dropped:** a PayPal webhook endpoint in the firewall. Verifying it would need the tenant's PayPal credentials, and MWF holds none. Integrations report provider-confirmed outcomes through `/v1/actions/outcome` instead.
 
 ## M7 — Neural sensors (Nov 7–9)
 

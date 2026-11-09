@@ -1,7 +1,6 @@
-import type { ContextItem, Mandate, PaymentHold, ProposedAction } from "@mwf/core";
+import type { ContextItem, Mandate, PreparedEffect, ProposedAction } from "@mwf/core";
 import { type Approval, type FirewallClient, FirewallError, type FirewallSession, type Verdict } from "./client.js";
 import { type BrowserPage, type BrowserRequest, type BrowserResponse, pageContextItem, recordStylesheets } from "./page.js";
-import type { PaymentPlugin } from "./paypal.js";
 
 // The tools an agent gets instead of its own browser and payment access.
 //
@@ -36,17 +35,22 @@ export type ReadResult =
   | { status: "withheld"; id: string; uri: string | null; rule_ids: string[] }
   | { status: "refused"; rule_ids: string[] }; // the request itself was not sent
 
-// For a payment the provider held funds for, `hold` says which: voided after BLOCK, still held
-// after REVIEW (for a person to capture or void).
+// When the outside system had prepared the action, `prepared` says what: cancelled after BLOCK,
+// still held after REVIEW (for a person to execute or cancel).
 export type ProposalResult<R> =
   | { status: "executed"; receipt: R }
-  | { status: "BLOCK" | "REVIEW"; rule_ids: string[]; hold?: PaymentHold };
+  | { status: "BLOCK" | "REVIEW"; rule_ids: string[]; prepared?: PreparedEffect };
 
-// What a captured payment hands to `execute`.
-export interface PaymentReceipt {
-  hold: PaymentHold;
-  capture_id: string;
-  status: string;
+// Two-phase commit for irreversible actions, written by the business with its own systems and
+// credentials: prepare without doing (authorize a payment, draft an email, stage a transaction),
+// then execute or cancel. The Guard only decides which, from the firewall's answer; it never
+// talks to those systems itself.
+export interface TwoPhase<R> {
+  appliesTo(action: ProposedAction): boolean;
+  // What the system reports it has ready, copied from its own answer, never from the model.
+  prepare(action: ProposedAction, idempotencyKey: string): Promise<PreparedEffect>;
+  execute(prepared: PreparedEffect, action: ProposedAction, idempotencyKey: string): Promise<{ receipt: R; status: string; external_ids?: Record<string, string> }>;
+  cancel(prepared: PreparedEffect, idempotencyKey: string): Promise<{ status: string }>;
 }
 
 export interface GuardedTools<R> {
@@ -67,11 +71,11 @@ export interface GuardOptions<R> {
   mandate: Mandate;
   openTab: () => Promise<BrowserTab>;
   // Runs an action the firewall approved and committed; the only path to it. The key goes to the
-  // payment provider, so a retried call cannot charge twice.
-  // With `payments`, a payment.* action reaches it only after its funds were captured.
-  execute: (action: ProposedAction, idempotencyKey: string, payment?: PaymentReceipt) => Promise<R>;
-  // Two-phase commit for payment.* actions: authorize, firewall commit check, capture or void.
-  payments?: PaymentPlugin;
+  // business's own system, so a retried call cannot act twice.
+  execute: (action: ProposedAction, idempotencyKey: string) => Promise<R>;
+  // Actions the business's systems can prepare first are checked twice: before they are prepared,
+  // and against what was actually prepared.
+  twoPhase?: TwoPhase<R>;
   // Origins the agent's browser may talk to, besides trustedOrigins. Everything else is refused,
   // so an injected agent cannot reach internal services or send data to its own server.
   allowedOrigins: string[];
@@ -237,8 +241,8 @@ export class Guard<R> {
     this.events.push({ checkpoint: "action", verdict: check });
     if (!check.approval) return { status: check.decision === "BLOCK" ? "BLOCK" : "REVIEW", rule_ids: ruleIds(check) };
 
-    const payments = this.#options.payments;
-    if (payments && type.startsWith("payment.")) return this.#pay(payments, check.approval);
+    const twoPhase = this.#options.twoPhase;
+    if (twoPhase?.appliesTo(check.approval.action)) return this.#twoPhase(twoPhase, check.approval);
 
     const commit = await this.#session.commitAction(check.approval);
     this.events.push({ checkpoint: "commit", verdict: commit });
@@ -247,56 +251,57 @@ export class Guard<R> {
     return { status: "executed", receipt: await this.#options.execute(check.approval.action, check.approval.idempotencyKey) };
   }
 
-  // Funds are held only after the firewall approved the action, and taken only after it checked
-  // what PayPal actually holds. Anything but ALLOW at commit voids the hold, except REVIEW, which
-  // keeps it for a person to decide.
-  async #pay(payments: PaymentPlugin, approval: Approval): Promise<ProposalResult<R>> {
+  // Prepared only after the firewall approved the action, executed only after it checked what was
+  // actually prepared. Anything but ALLOW at commit cancels, except REVIEW, which keeps it for a
+  // person. Every failure cancels.
+  async #twoPhase(twoPhase: TwoPhase<R>, approval: Approval): Promise<ProposalResult<R>> {
     const key = approval.idempotencyKey;
-    let hold: PaymentHold;
+    let prepared: PreparedEffect;
     try {
-      hold = await payments.authorize(approval.action, key);
+      prepared = await twoPhase.prepare(approval.action, key);
     } catch (err) {
       await this.#session.releaseAction(approval).catch(() => undefined);
       throw err;
     }
     let commit;
     try {
-      commit = await this.#session.commitAction(approval, approval.action, hold);
+      commit = await this.#session.commitAction(approval, approval.action, prepared);
     } catch (err) {
       // No answer from the firewall is not permission.
-      await this.#voidQuietly(payments, hold, key);
+      await this.#cancelQuietly(twoPhase, prepared, key);
       throw err;
     }
     this.events.push({ checkpoint: "commit", verdict: commit });
 
-    if (commit.decision === "ALLOW" && commit.settle === "capture") {
-      let captured: { capture_id: string; status: string };
+    if (commit.decision === "ALLOW" && commit.next === "execute") {
+      let done: Awaited<ReturnType<TwoPhase<R>["execute"]>>;
       try {
-        captured = await payments.capture(hold, key);
+        done = await twoPhase.execute(prepared, approval.action, key);
       } catch (err) {
-        await this.#voidQuietly(payments, hold, key);
+        await this.#cancelQuietly(twoPhase, prepared, key);
         throw err;
       }
-      // The money is taken: the order step runs even if the firewall could not record it.
-      await this.#session.settlePayment(hold, { outcome: "captured", status: captured.status, capture_id: captured.capture_id }).catch(() => undefined);
-      const receipt = await this.#options.execute(approval.action, key, { hold, ...captured });
-      return { status: "executed", receipt };
+      // It happened: the receipt is returned even if the firewall could not record it.
+      await this.#session
+        .reportOutcome(prepared, { outcome: "executed", status: done.status, ...(done.external_ids && { external_ids: done.external_ids }) })
+        .catch(() => undefined);
+      return { status: "executed", receipt: done.receipt };
     }
     if (commit.decision === "REVIEW") {
-      await this.#session.settlePayment(hold, { outcome: "held", status: hold.status }).catch(() => undefined);
-      return { status: "REVIEW", rule_ids: ruleIds(commit), hold };
+      await this.#session.reportOutcome(prepared, { outcome: "held", status: prepared.status ?? "held" }).catch(() => undefined);
+      return { status: "REVIEW", rule_ids: ruleIds(commit), prepared };
     }
-    // BLOCK, or an ALLOW without a capture instruction.
-    await this.#voidQuietly(payments, hold, key);
-    return { status: "BLOCK", rule_ids: ruleIds(commit), hold };
+    // BLOCK, or an ALLOW without an execute instruction.
+    await this.#cancelQuietly(twoPhase, prepared, key);
+    return { status: "BLOCK", rule_ids: ruleIds(commit), prepared };
   }
 
-  // Voids the hold and records it. A failed void leaves the authorization to expire at PayPal,
-  // which never captures it; the error is not the agent's to handle.
-  async #voidQuietly(payments: PaymentPlugin, hold: PaymentHold, key: string) {
+  // Cancels and records it. A failed cancel leaves the prepared action to expire in its system,
+  // which never executes it; the error is not the agent's to handle.
+  async #cancelQuietly(twoPhase: TwoPhase<R>, prepared: PreparedEffect, key: string) {
     try {
-      const v = await payments.void(hold, key);
-      await this.#session.settlePayment(hold, { outcome: "voided", status: v.status }).catch(() => undefined);
+      const c = await twoPhase.cancel(prepared, key);
+      await this.#session.reportOutcome(prepared, { outcome: "cancelled", status: c.status }).catch(() => undefined);
     } catch {
       /* see above */
     }

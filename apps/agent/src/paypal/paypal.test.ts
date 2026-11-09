@@ -1,7 +1,7 @@
 import type { ProposedAction } from "@mwf/core";
 import { describe, expect, it } from "vitest";
 import { FakePayPal } from "./fake-paypal.js";
-import { PayPalError, PayPalPayments } from "./paypal.js";
+import { PayPalError, PayPalSandbox } from "./paypal.js";
 
 const SANDBOX = "https://api-m.sandbox.paypal.com";
 const action = (total = "12.50", payee_email?: string): ProposedAction => ({
@@ -14,25 +14,26 @@ const action = (total = "12.50", payee_email?: string): ProposedAction => ({
   derived_from: [],
 });
 const plugin = (paypal: FakePayPal) =>
-  new PayPalPayments({ clientId: "client", clientSecret: "secret-never-shown", apiBase: SANDBOX, vaultId: "VAULT1", fetch: paypal.fetch });
+  new PayPalSandbox({ clientId: "client", clientSecret: "secret-never-shown", apiBase: SANDBOX, vaultId: "VAULT1", fetch: paypal.fetch });
 
-describe("PayPalPayments", () => {
+// The demo business's PayPal code (not MWF's), against the stand-in.
+describe("PayPalSandbox", () => {
   it("refuses anything but the sandbox", () => {
     for (const apiBase of ["https://api-m.paypal.com", "http://api-m.sandbox.paypal.com", "https://api-m.sandbox.paypal.com.evil.example"]) {
-      expect(() => new PayPalPayments({ clientId: "c", clientSecret: "s", apiBase, vaultId: "v" })).toThrow(PayPalError);
+      expect(() => new PayPalSandbox({ clientId: "c", clientSecret: "s", apiBase, vaultId: "v" })).toThrow(PayPalError);
     }
   });
 
-  it("reports the hold as PayPal records it", async () => {
+  it("reports the authorization as PayPal records it, as a prepared effect", async () => {
     const paypal = new FakePayPal({ defaultPayee: "pay@shop-a.example" });
     const hold = await plugin(paypal).authorize(action(), "key-1");
     expect(hold).toEqual({
-      provider: "paypal",
-      order_id: "FAKEORDER1",
-      authorization_id: "FAKEAUTH1",
+      system: "paypal",
+      reference: "FAKEAUTH1",
+      ready: true,
       status: "CREATED",
-      amount: { value: "12.50", currency: "USD" },
-      payee: { email: "pay@shop-a.example", merchant_id: "FAKEMERCHANT1" },
+      effect: { amount: { value: "12.50", currency: "USD" }, payee: { email: "pay@shop-a.example", id: "FAKEMERCHANT1" } },
+      external_ids: { order_id: "FAKEORDER1" },
     });
     expect([...paypal.orders.values()][0]!.custom_id).toBe("key-1");
   });
@@ -45,8 +46,7 @@ describe("PayPalPayments", () => {
       },
     });
     const hold = await plugin(paypal).authorize(action(), "key-1");
-    expect(hold.amount.value).toBe("99.00");
-    expect(hold.payee.email).toBe("thief@evil.example");
+    expect(hold.effect).toEqual({ amount: { value: "99.00", currency: "USD" }, payee: { email: "thief@evil.example", id: "FAKEMERCHANT1" } });
   });
 
   it("captures and voids, each idempotent under its own request id", async () => {

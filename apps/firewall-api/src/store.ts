@@ -126,27 +126,21 @@ export function openDatabase(path: string): DatabaseSync {
   addColumnIfMissing(db, "merchants", "checkout_origins", "TEXT NOT NULL DEFAULT '[]'");
   // What the token would spend, so a session's purchases can be held to its mandate together.
   addColumnIfMissing(db, "action_tokens", "amount_cents", "INTEGER NOT NULL DEFAULT 0");
-  // Two-phase payments: the provider's hold this token was committed with, the commit's
-  // decision, and how the hold ended (captured, voided, held for a person).
-  addColumnIfMissing(db, "action_tokens", "hold_provider", "TEXT");
-  addColumnIfMissing(db, "action_tokens", "hold_order_id", "TEXT");
-  addColumnIfMissing(db, "action_tokens", "hold_authorization_id", "TEXT");
+  // Two-phase commit: what the outside system prepared for this token (its system, its id, the
+  // effect it reported), the commit's decision, and how it ended (executed, cancelled, held).
   addColumnIfMissing(db, "action_tokens", "commit_decision", "TEXT");
-  addColumnIfMissing(db, "action_tokens", "settled_as", "TEXT");
-  addColumnIfMissing(db, "action_tokens", "hold_tenant_id", "TEXT");
-  // Within a tenant, one authorization settles one approved action, never two. Per tenant, so
-  // one tenant cannot claim another's authorization id first and block its payments.
+  addColumnIfMissing(db, "action_tokens", "prepared_tenant_id", "TEXT");
+  addColumnIfMissing(db, "action_tokens", "prepared_system", "TEXT");
+  addColumnIfMissing(db, "action_tokens", "prepared_reference", "TEXT");
+  addColumnIfMissing(db, "action_tokens", "outcome", "TEXT");
+  // Indexes of an earlier draft of this table, over columns no longer used.
   db.exec("DROP INDEX IF EXISTS action_tokens_hold");
+  db.exec("DROP INDEX IF EXISTS action_tokens_tenant_hold");
+  // Within a tenant, one prepared action settles one approved action, never two. Per tenant, so
+  // one tenant cannot claim another's reference first and block its actions.
   db.exec(
-    "CREATE UNIQUE INDEX IF NOT EXISTS action_tokens_tenant_hold ON action_tokens (hold_tenant_id, hold_provider, hold_authorization_id) WHERE hold_authorization_id IS NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS action_tokens_prepared ON action_tokens (prepared_tenant_id, prepared_system, prepared_reference) WHERE prepared_reference IS NOT NULL",
   );
-  // Provider webhook events already recorded, so a redelivery is not recorded twice.
-  db.exec(`CREATE TABLE IF NOT EXISTS webhook_events (
-    provider    TEXT NOT NULL,
-    event_id    TEXT NOT NULL,
-    received_at TEXT NOT NULL,
-    PRIMARY KEY (provider, event_id)
-  )`);
   return db;
 }
 

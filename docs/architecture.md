@@ -273,7 +273,7 @@ Every action type is registered with a schema and a **risk class** built from pr
 - Touches sensitive data?
 - Changes permissions?
 
-Default policies attach to risk classes, so **a new action type is protected on day one**. Payments are "irreversible + money", plus a payments plugin with its own schema, rules and two-phase commit.
+Default policies attach to risk classes, so **a new action type is protected on day one**. Payments are "irreversible + money", with their own argument schema and rules. Every irreversible family uses the same two-phase commit: the integration's own system prepares the action, the firewall checks what was actually prepared (a per-family effect checker; payments first), and the integration executes or cancels it with its own code. MWF never executes actions or holds the outside system's credentials.
 
 ### 10.2 Structural controls
 

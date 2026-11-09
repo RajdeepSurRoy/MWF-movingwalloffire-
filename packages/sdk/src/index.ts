@@ -5,6 +5,3 @@ export type { Decision } from "@mwf/core";
 export * from "./client.js";
 export * from "./guard.js";
 export * from "./page.js";
-export * from "./paypal.js";
-// A stand-in for the PayPal sandbox, for tests and offline demos.
-export { FakePayPal } from "./fake-paypal.js";

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-// An in-memory stand-in for the PayPal sandbox endpoints PayPalPayments uses, as a `fetch`.
+// An in-memory stand-in for the PayPal sandbox endpoints the demo business's PayPalSandbox uses, as a `fetch`.
 // For tests and offline demos only: it follows the documented request and response shapes,
 // including PayPal-Request-Id idempotency, but it is not PayPal.
 

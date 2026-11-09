@@ -1,18 +1,10 @@
-import { type PaymentHold, PaymentArgs, type ProposedAction } from "@mwf/core";
+import { PaymentArgs, type PreparedEffect, type ProposedAction } from "@mwf/core";
+import type { TwoPhase } from "@mwf/sdk";
 
-// Two-phase payments with PayPal: authorize (funds held), let the firewall check the hold at
-// commit, then capture on ALLOW or void otherwise. Runs in the business's own process with its
-// own PayPal app; the firewall never holds PayPal credentials for payments.
-//
-// Pays with a vaulted PayPal wallet (Payment Method Tokens API), so no buyer is present.
-// Sandbox only: a live API base is refused.
-
-export interface PaymentPlugin {
-  // Holds the action's total. What it returns is what the provider reported, not the action.
-  authorize(action: ProposedAction, idempotencyKey: string): Promise<PaymentHold>;
-  capture(hold: PaymentHold, idempotencyKey: string): Promise<{ capture_id: string; status: string }>;
-  void(hold: PaymentHold, idempotencyKey: string): Promise<{ status: string }>;
-}
+// The demo business's own PayPal code, not part of MWF. It is what a real agent platform already
+// has: authorize, capture, void with its own sandbox app and a vaulted buyer wallet (no buyer
+// present). It reports each authorization to the firewall as a generic prepared effect, then does
+// what the firewall's answer says. Sandbox only: a live API base is refused.
 
 export class PayPalError extends Error {
   constructor(
@@ -49,7 +41,7 @@ interface Order {
   purchase_units?: { payee?: { email_address?: string; merchant_id?: string }; payments?: { authorizations?: Authorization[] } }[];
 }
 
-export class PayPalPayments implements PaymentPlugin {
+export class PayPalSandbox {
   readonly #o: Required<Omit<PayPalOptions, "fetch">> & { fetch: typeof globalThis.fetch };
   #token: { value: string; until: number } | undefined;
 
@@ -106,7 +98,8 @@ export class PayPalPayments implements PaymentPlugin {
     return json as T;
   }
 
-  async authorize(action: ProposedAction, idempotencyKey: string): Promise<PaymentHold> {
+  // Holds the action's total. Returns what PayPal reports, not what the action says.
+  async authorize(action: ProposedAction, idempotencyKey: string): Promise<PreparedEffect> {
     const args = PaymentArgs.parse(action.args);
     const order = await this.#call<Order>("POST", "/v2/checkout/orders", idempotencyKey, {
       intent: "AUTHORIZE",
@@ -134,29 +127,53 @@ export class PayPalPayments implements PaymentPlugin {
     const full = await this.#call<Order>("GET", `/v2/checkout/orders/${encodeURIComponent(order.id)}`, null);
     const payee = full.purchase_units?.[0]?.payee;
     return {
-      provider: "paypal",
-      order_id: order.id,
-      authorization_id: authorization.id,
+      system: "paypal",
+      reference: authorization.id,
+      ready: authorization.status === "CREATED",
       status: authorization.status,
-      amount: { value: authorization.amount.value, currency: authorization.amount.currency_code },
-      payee: { ...(payee?.email_address && { email: payee.email_address }), ...(payee?.merchant_id && { merchant_id: payee.merchant_id }) },
+      effect: {
+        amount: { value: authorization.amount.value, currency: authorization.amount.currency_code },
+        payee: { ...(payee?.email_address && { email: payee.email_address }), ...(payee?.merchant_id && { id: payee.merchant_id }) },
+      },
+      external_ids: { order_id: order.id },
     };
   }
 
-  async capture(hold: PaymentHold, idempotencyKey: string) {
+  async capture(prepared: PreparedEffect, idempotencyKey: string) {
     const c = await this.#call<{ id: string; status: string }>(
       "POST",
-      `/v2/payments/authorizations/${encodeURIComponent(hold.authorization_id)}/capture`,
+      `/v2/payments/authorizations/${encodeURIComponent(prepared.reference)}/capture`,
       `${idempotencyKey}-capture`,
       { final_capture: true },
     );
     return { capture_id: c.id, status: c.status };
   }
 
-  async void(hold: PaymentHold, idempotencyKey: string) {
-    const path = `/v2/payments/authorizations/${encodeURIComponent(hold.authorization_id)}`;
+  async void(prepared: PreparedEffect, idempotencyKey: string) {
+    const path = `/v2/payments/authorizations/${encodeURIComponent(prepared.reference)}`;
     await this.#call("POST", `${path}/void`, `${idempotencyKey}-void`);
     const a = await this.#call<Authorization>("GET", path, null);
     return { status: a.status };
   }
+}
+
+export interface PaymentReceipt {
+  order_id: string;
+  authorization_id: string;
+  capture_id: string;
+  status: string;
+}
+
+// How this business plugs its PayPal code into the SDK's two-phase commit.
+export function paypalTwoPhase(paypal: PayPalSandbox): TwoPhase<PaymentReceipt> {
+  return {
+    appliesTo: (action) => action.type.startsWith("payment."),
+    prepare: (action, key) => paypal.authorize(action, key),
+    execute: async (prepared, _action, key) => {
+      const c = await paypal.capture(prepared, key);
+      const order_id = prepared.external_ids?.order_id ?? "";
+      return { receipt: { order_id, authorization_id: prepared.reference, ...c }, status: c.status, external_ids: { capture_id: c.capture_id } };
+    },
+    cancel: (prepared, key) => paypal.void(prepared, key),
+  };
 }

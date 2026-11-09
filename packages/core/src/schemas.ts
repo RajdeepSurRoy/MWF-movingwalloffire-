@@ -88,20 +88,35 @@ export const PaymentArgs = z.strictObject({
 });
 export type PaymentArgs = z.infer<typeof PaymentArgs>;
 
-// Funds the payment provider is holding for an approved payment (two-phase commit: authorize,
-// check, then capture or void). Every field is copied by the integration's code from the
-// provider's own response, never from the model or the page.
-export const PaymentHold = z.strictObject({
-  provider: z.literal("paypal"),
-  order_id: z.string().min(1).max(64).regex(/^[A-Za-z0-9-]+$/),
-  authorization_id: z.string().min(1).max(64).regex(/^[A-Za-z0-9-]+$/),
-  // The authorization's status as the provider reported it. Only CREATED holds funds to capture.
-  status: z.string().min(1).max(40),
-  amount: Money,
-  // Who the provider says will be paid.
-  payee: z.strictObject({ email: z.email().max(320).optional(), merchant_id: z.string().max(64).optional() }),
+// Two-phase commit for any irreversible action: the integration has the outside system prepare
+// the action (a payment authorized, an email drafted, a transaction staged) without doing it, and
+// reports here what that system says will happen. The firewall compares it with what it approved,
+// then the integration executes or cancels it with its own code. MWF never acts on the system.
+// Every field is copied by the integration's code from the system's own answer, never from the
+// model or a page.
+const ExternalId = z.string().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/);
+export const PreparedEffect = z.strictObject({
+  // Which outside system holds it, e.g. "paypal", "smtp", "postgres".
+  system: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/),
+  // That system's id for the prepared action (an authorization id, a draft id).
+  reference: ExternalId,
+  // The system holds it ready to execute (an authorization still live, a draft not yet sent).
+  ready: z.boolean(),
+  // The system's own status word, for the record.
+  status: z.string().min(1).max(60).optional(),
+  // What will happen, as the system reports it. Its shape depends on the action type.
+  effect: z.record(z.string(), z.unknown()),
+  // Other ids of the system worth keeping as evidence, e.g. { order_id }.
+  external_ids: z.record(z.string().regex(/^[a-z][a-z0-9_]{0,39}$/), ExternalId).optional(),
 });
-export type PaymentHold = z.infer<typeof PaymentHold>;
+export type PreparedEffect = z.infer<typeof PreparedEffect>;
+
+// The effect of a prepared payment.* action: what the provider will take, and who it will pay.
+export const PaymentEffect = z.strictObject({
+  amount: Money,
+  payee: z.strictObject({ email: z.email().max(320).optional(), id: z.string().min(1).max(128).optional() }),
+});
+export type PaymentEffect = z.infer<typeof PaymentEffect>;
 
 // A side effect the agent wants to cause. The core does not know what a payment is;
 // the action type tells the policy which argument schema applies.

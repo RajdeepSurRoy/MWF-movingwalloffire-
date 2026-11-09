@@ -1,7 +1,7 @@
 import type { Mandate, ProposedAction } from "@mwf/core";
 import { describe, expect, it, vi } from "vitest";
 import { FirewallClient, FirewallError } from "./client.js";
-import { Guard, IntentRefused, MAX_READS } from "./guard.js";
+import { Guard, IntentRefused, MAX_READS, type TwoPhase } from "./guard.js";
 
 // Guard against a stubbed API: what happens when the firewall says no, says nothing, or says
 // something malformed. The real API and browser are in apps/agent/src/agent.test.ts.
@@ -41,7 +41,7 @@ const defaults: Routes = {
   "/v1/actions/commit": () => ({ body: { ...verdict("ALLOW", "COMMIT.HASH_MATCH"), action_hash: "a" } }),
 };
 
-async function setup(routes: Routes = {}) {
+async function setup(routes: Routes = {}, twoPhase?: TwoPhase<{ order_id: string }>) {
   const calls: { path: string; body: Record<string, unknown> }[] = [];
   const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const path = new URL(String(url)).pathname;
@@ -58,6 +58,7 @@ async function setup(routes: Routes = {}) {
     mandate,
     openTab: () => Promise.reject(new Error("no browser in this test")),
     execute,
+    ...(twoPhase && { twoPhase }),
     allowedOrigins: ["https://shop-a.example"],
   });
   const read = guard.wrapRead(async (text: string) => text);
@@ -227,5 +228,57 @@ describe("Guard", () => {
     await guard.tools.propose("payment.authorize", args);
     expect(guard.events.at(-1)).toMatchObject({ checkpoint: "action", verdict: { reasons: [{ message: QUOTE }] } });
     expect(Object.keys(guard.tools).sort()).toEqual(["browse", "propose"]);
+  });
+
+  describe("two-phase commit", () => {
+    const prepared = { system: "pay", reference: "AUTH1", ready: true, effect: { amount: { value: "1.00", currency: "USD" }, payee: {} } };
+    const hooks = () => {
+      const log: string[] = [];
+      const twoPhase: TwoPhase<{ order_id: string }> = {
+        appliesTo: (a) => a.type.startsWith("payment."),
+        prepare: async () => (log.push("prepare"), prepared),
+        execute: async () => (log.push("execute"), { receipt: { order_id: "o-1" }, status: "DONE" }),
+        cancel: async () => (log.push("cancel"), { status: "CANCELLED" }),
+      };
+      return { log, twoPhase };
+    };
+    const commitWith = (next: string, decision = "ALLOW") => () => ({ body: { ...verdict(decision, "X"), action_hash: "a", next } });
+    const outcome = () => ({ body: { recorded: true, ledger_seq: 1, follows_decision: true } });
+
+    it("executes with the business's own code only when the firewall says execute", async () => {
+      const { log, twoPhase } = hooks();
+      const { guard, calls, execute } = await setup({ "/v1/actions/commit": commitWith("execute"), "/v1/actions/outcome": outcome }, twoPhase);
+      await expect(guard.tools.propose("payment.authorize", args)).resolves.toEqual({ status: "executed", receipt: { order_id: "o-1" } });
+      expect(log).toEqual(["prepare", "execute"]);
+      expect(execute).not.toHaveBeenCalled();
+      expect(calls.find((c) => c.path === "/v1/actions/commit")!.body.prepared).toEqual(prepared);
+      expect(calls.find((c) => c.path === "/v1/actions/outcome")!.body).toMatchObject({ reference: "AUTH1", outcome: "executed" });
+    });
+
+    it("cancels on BLOCK and keeps the prepared action on REVIEW", async () => {
+      const blocked = hooks();
+      const a = await setup({ "/v1/actions/commit": commitWith("cancel", "BLOCK"), "/v1/actions/outcome": outcome }, blocked.twoPhase);
+      await expect(a.guard.tools.propose("payment.authorize", args)).resolves.toMatchObject({ status: "BLOCK", prepared });
+      expect(blocked.log).toEqual(["prepare", "cancel"]);
+
+      const held = hooks();
+      const b = await setup({ "/v1/actions/commit": commitWith("hold", "REVIEW"), "/v1/actions/outcome": outcome }, held.twoPhase);
+      await expect(b.guard.tools.propose("payment.authorize", args)).resolves.toMatchObject({ status: "REVIEW", prepared });
+      expect(held.log).toEqual(["prepare"]);
+    });
+
+    it("cancels when the firewall does not answer the commit", async () => {
+      const { log, twoPhase } = hooks();
+      const { guard } = await setup({ "/v1/actions/commit": () => new Error("network down"), "/v1/actions/outcome": outcome }, twoPhase);
+      await expect(guard.tools.propose("payment.authorize", args)).rejects.toBeInstanceOf(FirewallError);
+      expect(log).toEqual(["prepare", "cancel"]);
+    });
+
+    it("cancels on an ALLOW that does not say execute", async () => {
+      const { log, twoPhase } = hooks();
+      const { guard } = await setup({ "/v1/actions/commit": commitWith("hold"), "/v1/actions/outcome": outcome }, twoPhase);
+      await expect(guard.tools.propose("payment.authorize", args)).resolves.toMatchObject({ status: "BLOCK" });
+      expect(log).toEqual(["prepare", "cancel"]);
+    });
   });
 });
