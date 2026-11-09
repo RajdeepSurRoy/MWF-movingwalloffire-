@@ -40,7 +40,7 @@ const rule = (state: "shadow" | "enforced", over: Partial<RuleBundle["claim_rule
   learned: { families: ["fam-x"], backtest: { caught: 1, of: 1, legit_broken: 0, weakened: 0 }, approved_by: "test", approved_at: "2026-11-09T00:00:00.000Z" },
   ...over,
 });
-const bundleWith = (...claim_rules: ReturnType<typeof rule>[]) => RuleBundle.parse({ ...getDefaultBundle(), claim_rules });
+const bundleWith = (...claim_rules: ReturnType<typeof rule>[]) => RuleBundle.parse({ ...getDefaultBundle(), claim_rules, claim_sensors: [] });
 const check = (body: string, bundle = getDefaultBundle()) => checkAction({ mandate, context: [page(body)], action, now: NOW, merchants }, bundle);
 const ids = (r: { reasons: { rule_id: string }[] }) => r.reasons.map((x) => x.rule_id);
 

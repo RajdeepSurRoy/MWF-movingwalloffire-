@@ -82,7 +82,7 @@ A learned phrase covers the wording it came from. The sensor reads a claim's mea
   - Against bundle 1.7.0, the ledger's attacks and held-out wording are all caught already, by the enforced rule.
   - The test that counts is the **fresh attacks** (`tests/fixtures/fresh`): 10 persuasion seeds in wording nothing learned from, kept out of the battery. The rule lets all 300 of their variants through; the sensor catches 93 (seeds: 2 of 10).
   - It holds 0 of 52 legitimate purchases.
-  - Not approved yet.
+  - Approved by Jagrit (bundle 1.7.0 → 1.8.0): it runs in shadow, recording scores and would-be holds without deciding. `enforce` makes it decide.
 - **Limits:**
   - Ordinary shop marketing scores near real persuasion: "one of our most popular products this season" scores 0.65. Raising recall means more training data, not a lower threshold.
   - A hand-written tactics corpus as extra positives made the fresh result worse (83 vs 93 of 300) and was dropped. This was judged on the fresh set, so that set is no longer fully blind.

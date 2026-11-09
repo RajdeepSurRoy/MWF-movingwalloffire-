@@ -208,7 +208,7 @@ MWF is a check-and-record layer: it never executes an action, never calls the ou
 4. **Injection classifier** (off-the-shelf DeBERTa or Prompt Guard; check the license) on untrusted spans at checkpoint 2, REVIEW only. Same calibration.
 5. Wire both into the decision engine as tighten-only signals.
    - *Done when:* harness shows the semantic signals reduce ASR for persuasion / fake compliance without pushing legitimate false positives over target; p99 latency per call under 50 ms on a laptop CPU.
-6. **Status 2026-11-10: the persuasion sensor is built; it is a candidate, not yet approved.** Details in [redteam/README.md](../redteam/README.md#embedding-sensor-m7).
+6. **Status 2026-11-10: the persuasion sensor is built. `SEN.PERSUASION.F0B2BBF9` was approved by Jagrit and runs in shadow (bundle 1.8.0): it scores and records, but does not decide yet.** Details in [redteam/README.md](../redteam/README.md#embedding-sensor-m7).
    - **Changed from the plan:**
      - No Python sidecar. The model runs in-process with transformers.js and ONNX Runtime (`packages/sensors`). The stack is all TypeScript, and the machines here have no Python 3.12/3.13 for the ML wheels.
      - The vectors are computed before the decision. The engine stays synchronous and does only the dot product.
@@ -229,7 +229,7 @@ MWF is a check-and-record layer: it never executes an action, never calls the ou
      - intent ↔ cart similarity (item 2)
      - the injection classifier (item 4)
      - a larger negative corpus from real pages
-     - approval of `SEN.PERSUASION.F0B2BBF9`
+     - enforcing `SEN.PERSUASION.F0B2BBF9`, after its shadow scores are reviewed
 
 ## M8 — Red team and learning loop (Nov 8–11)
 
