@@ -75,7 +75,7 @@ describe("claims", () => {
 
 describe("learned claim rules in checkAction", () => {
   it("v1 lets the persuasion through: in budget, in category", () => {
-    expect(check(CLAIM).decision).toBe("ALLOW");
+    expect(check(CLAIM, bundleWith()).decision).toBe("ALLOW");
   });
 
   it("an enforced rule holds it for REVIEW, never BLOCK", () => {

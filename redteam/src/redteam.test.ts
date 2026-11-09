@@ -6,7 +6,7 @@ import { loadCases, loadMerchants } from "@mwf/tests/harness";
 import { describe, expect, it } from "vitest";
 import { emptyLedger, legitPhrases, propose, record, similarity } from "./learn.js";
 import { HELD_OUT_PARAPHRASES, PARAPHRASES, mutate } from "./mutate.js";
-import { approve, backtest, enforce, writeBundle } from "./rollout.js";
+import { approve, backtest, enforce, withoutLearned, writeBundle } from "./rollout.js";
 import { expand, runAll } from "./runner.js";
 
 const all = loadCases();
@@ -14,7 +14,8 @@ const merchants = loadMerchants();
 const legit = all.filter((c) => c.category === "legit");
 const persuasion = all.filter((c) => c.category === "persuasion");
 const train = persuasion.filter((c) => ["persuasion-1", "persuasion-2", "persuasion-3"].includes(c.id));
-const v1 = getDefaultBundle();
+// Before anything was learned, whatever the repo's bundle has approved since.
+const v1 = withoutLearned(getDefaultBundle());
 
 describe("mutation engine", () => {
   it("makes 20+ variants per seed, each keeping the seed's ground truth", () => {

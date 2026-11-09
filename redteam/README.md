@@ -3,7 +3,7 @@
 Finds attacks that get past the firewall, learns a rule from them, and rolls the rule out only after a backtest and a person's approval. Nothing here changes a decision by itself.
 
 ```bash
-npm run redteam -- demo                              # the whole loop in memory; writes nothing
+npm run redteam -- demo                              # the whole loop in memory, from the bundle minus its learned rules; writes nothing
 npm run redteam -- run [--category persuasion]       # mutate the attack fixtures, record bypasses
 npm run redteam -- learn                             # propose a rule from the ledger, backtest it
 npm run redteam -- approve <rule-id> --by <name>     # candidate → shadow (bundle version +1)
@@ -44,7 +44,7 @@ npm run redteam -- enforce <rule-id> --by <name>     # shadow → enforced (bund
 - `learn` proposes `LRN.CLAIM.CCB11DF2`:
   - It catches 265 of 265.
   - It holds 0 of 52 legitimate purchases and softens no decision.
-  - It is **not approved yet**: approval is a person's decision.
+  - Approved by Jagrit (bundle 1.6.0, shadow) and enforced (bundle 1.7.0). The battery is now at 0% attack success and 0% false positives.
 - `demo` trains on 5 persuasion seeds and tests on the other 5:
   - On the training seeds and their 135 variants, v1 lets 119 through; after enforcement, 0 get through.
   - On the 5 unseen seeds and their variants (including the held-out wording), 101 of 140 get through, before and after.

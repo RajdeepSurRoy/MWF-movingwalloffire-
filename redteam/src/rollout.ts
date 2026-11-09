@@ -56,6 +56,10 @@ export function backtest(base: RuleBundle, rule: ClaimRule, cases: Variant[], me
   return out;
 }
 
+// The bundle as it was before anything was learned: the demo and tests start the loop here,
+// whatever the repo's bundle has already learned.
+export const withoutLearned = (bundle: RuleBundle): RuleBundle => RuleBundle.parse({ ...bundle, claim_rules: [] });
+
 export const approvable = (b: Backtest) => b.legit_broken === 0 && b.weakened === 0 && b.caught > 0;
 
 function bump(version: string): string {

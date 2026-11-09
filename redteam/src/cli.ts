@@ -14,7 +14,7 @@ import { type RuleBundle, type TestCase, getDefaultBundle, loadRuleBundle } from
 import { loadCases, loadMerchants } from "@mwf/tests/harness";
 import { type Candidate, type Ledger, emptyLedger, legitPhrases, propose, record } from "./learn.js";
 import { HELD_OUT_PARAPHRASES, type Variant, mutationKind } from "./mutate.js";
-import { type Backtest, approve, backtest, enforce, shadowHits, writeBundle } from "./rollout.js";
+import { type Backtest, approve, backtest, enforce, shadowHits, withoutLearned, writeBundle } from "./rollout.js";
 import { type Run, expand, runAll } from "./runner.js";
 
 const ROOT = resolve(import.meta.dirname, "../..");
@@ -67,7 +67,9 @@ const backtestSet = (variants: Variant[]): Variant[] => [
 ];
 
 function demo() {
-  const v1 = getDefaultBundle();
+  // Starts from the repo's bundle with its learned rules taken out, so the loop is shown from
+  // the beginning even after rules have been approved.
+  const v1 = withoutLearned(getDefaultBundle());
   const persuasion = attacks.filter((c) => c.category === "persuasion");
   const trainIds = (flag("--train") ?? "persuasion-1,persuasion-2,persuasion-3,persuasion-4,persuasion-5").split(",");
   const train = persuasion.filter((c) => trainIds.includes(c.id));
@@ -77,7 +79,7 @@ function demo() {
   // learner saw reaches them.
   const heldVariants = expand(heldOut, HELD_OUT_PARAPHRASES);
 
-  console.log(`MWF red team — learning loop demo (bundle ${v1.version})\n`);
+  console.log(`MWF red team — learning loop demo (bundle ${v1.version} without its learned rules; nothing is written)\n`);
   console.log(`1. Attack: ${train.length} persuasion seeds, ${trainVariants.length - train.length} mutations, against bundle ${v1.version}`);
   const runs1 = runAll(trainVariants, v1, merchants);
   table(runs1);

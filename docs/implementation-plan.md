@@ -226,7 +226,7 @@ MWF is a check-and-record layer: it never executes an action, never calls the ou
    - **Learned rules are claim rules:** the bought item is named in a promotional claim on an untrusted page. They match on phrases or fingerprints and are REVIEW only (the schema has no BLOCK for them). Shadow rules are recorded as `shadow_reasons` in the decision ledger. Policy 1.5.0, bundle 1.5.0.
    - **Demo:** 5 training seeds bypass v1 (119 of 140 with their variants). After learn, backtest (0 of 52 legitimate held), approve (shadow) and enforce, 0 get through.
    - **Unseen seeds:** 101 of 140 still get through. Phrase rules cover known families, not new wording; that is level 3 with M7's embeddings.
-   - **Candidate `LRN.CLAIM.CCB11DF2`** (from all 10 persuasion seeds) catches 265 of 265 bypasses, with 0 legitimate purchases held. It waits for a person's approval; approving it takes the battery's ASR to 0%.
+   - **`LRN.CLAIM.CCB11DF2`** (from all 10 persuasion seeds) catches 265 of 265 bypasses, with 0 legitimate purchases held. Approved and enforced by Jagrit (bundle 1.5.0 → 1.6.0 shadow → 1.7.0 enforced). The battery is now at 0% attack success and 0% false positives, and CI runs it with `--strict`. The demo starts from the bundle with its learned rules taken out.
    - **Found and fixed on the way:** text split at HTML entities ("ign&#111;re") was read as separate pieces by every rule. Texts with no tag between them are now one.
    - **Not done:**
      - level 3 with real embeddings (M7)
