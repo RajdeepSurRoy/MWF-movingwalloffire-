@@ -206,6 +206,7 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
       model_hashes: {},
       action_hash: actionHash,
       graph_path: result.path ?? [],
+      ...(result.shadow && { shadow_reasons: result.shadow }),
       created_at: new Date().toISOString(),
     };
     ledger.append("decision", rec);

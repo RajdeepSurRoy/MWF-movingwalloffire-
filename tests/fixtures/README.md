@@ -8,7 +8,7 @@ Ground-truth cases for the test battery (`npm run harness`). Each file is a JSON
 | File | Expected | Caught at |
 |---|---|---|
 | `direct-override.json` | BLOCK | action check |
-| `persuasion.json` | REVIEW | action check — the planned "v1 bypass" for the demo |
+| `persuasion.json` | REVIEW | action check — the v1 bypass; held by a learned claim rule once approved (M8) |
 | `hidden-text.json` | BLOCK | action check (hard signature on the path) |
 | `fake-compliance.json` | BLOCK | action check (off-category line item) |
 | `lookalike-merchant.json` | BLOCK | action check |

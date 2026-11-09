@@ -1,5 +1,5 @@
 {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Phase 0 deterministic rules. Every change bumps the version; every decision logs it.",
   "risk": {
     "weights": { "info": 5, "soft": 15, "hard": 40 },
@@ -90,5 +90,6 @@
     { "id": "OUT.SECRET.BEARER", "pattern": "\\bBearer\\s+[A-Za-z0-9._~+/-]{24,}", "decision": "BLOCK" },
     { "id": "OUT.SECRET.API_KEY", "pattern": "\\bsk-[A-Za-z0-9_-]{20,}", "decision": "BLOCK" },
     { "id": "OUT.EXFIL.MARKDOWN_IMAGE", "pattern": "!\\[[^\\]]*\\]\\(\\s*https?://[^)\\s]*\\?[^)\\s]{16,}\\)", "decision": "REVIEW" }
-  ]
+  ],
+  "claim_rules": []
 }

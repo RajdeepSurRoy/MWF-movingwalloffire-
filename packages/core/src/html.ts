@@ -12,7 +12,13 @@ export interface Segment {
   text: string;
   // Why a hidden segment is hidden, e.g. "display:none". Empty for other channels.
   how: string;
+  // The block element (paragraph, list item, heading...) the text is in. Texts of one block are
+  // one piece of writing however many inline tags split them ("Most <b>popular</b> pick").
+  block?: number;
 }
+
+// Elements that sit inside a line of text rather than starting a new block.
+const INLINE = new Set("a abbr b bdi bdo cite code data dfn em font i kbd label mark q s samp small span strong sub sup time u var".split(" "));
 
 const SKIP = new Set(["script", "style"]);
 // Content an agent reading the raw HTML sees but a human visitor does not.
@@ -453,16 +459,22 @@ export function extractSegments(html: string, extraCss = ""): ExtractedPage {
   const segments: Segment[] = [];
   // `conditional`: hidden only through classes or stylesheet rules on an element that also has
   // responsive classes, i.e. probably visible to some visitors (Tailwind `hidden md:block`).
-  const stack: { name: string; hidden: string; conditional: boolean; skip: boolean }[] = [];
+  const stack: { name: string; hidden: string; conditional: boolean; skip: boolean; block: number }[] = [];
+  let blocks = 0;
   const top = () => stack[stack.length - 1];
-  const seg = (el: { hidden: string; conditional: boolean } | undefined, text: string): Segment =>
+  const seg = (el: { hidden: string; conditional: boolean; block: number } | undefined, text: string, block = el?.block ?? 0): Segment =>
     !el?.hidden
-      ? { channel: "visible", text, how: "" }
-      : { channel: el.conditional ? "conditional" : "hidden", text, how: el.hidden };
+      ? { channel: "visible", text, how: "", block }
+      : { channel: el.conditional ? "conditional" : "hidden", text, how: el.hidden, block };
 
+  // The parser reports one run of text in several pieces when it holds entities
+  // ("ch&#x6f;ice" arrives as "ch", "o", "ice"). Pieces with no tag between them are one text,
+  // or "ign&#111;re previous instructions" would read as "ign o re" to every rule.
+  let textOpen = false;
   const parser = new Parser(
     {
       onopentag(name, attrs) {
+        textOpen = false;
         const parent = top();
         const classes = (attrs.class ?? "").toLowerCase().split(/\s+/).filter(Boolean);
         const ids = attrs.id ? [attrs.id.toLowerCase()] : [];
@@ -484,24 +496,34 @@ export function extractSegments(html: string, extraCss = ""): ExtractedPage {
             (parent?.hidden ?? "");
           conditional = hidden !== "" && (classes.some((c) => RESPONSIVE_CLASS.test(c)) || (!viaSheet && !viaClass && !!parent?.conditional));
         }
-        stack.push({ name, hidden, conditional, skip: (parent?.skip ?? false) || SKIP.has(name) });
+        const block = INLINE.has(name) && parent ? parent.block : ++blocks;
+        stack.push({ name, hidden, conditional, skip: (parent?.skip ?? false) || SKIP.has(name), block });
         const el = top();
         if (name === "meta" && attrs.content) segments.push({ channel: "meta", text: attrs.content, how: "meta tag" });
-        if (name === "input" && attrs.value && hidden) segments.push(seg(el, attrs.value));
+        if (name === "input" && attrs.value && hidden) segments.push(seg(el, attrs.value, ++blocks));
         for (const a of VISIBLE_ATTRS) {
           const v = attrs[a];
-          if (v) segments.push(seg(el, v));
+          if (v) segments.push(seg(el, v, ++blocks));
         }
       },
       ontext(text) {
         const el = top();
-        if (el?.skip || !text.trim()) return;
+        if (el?.skip) return;
+        const last = segments[segments.length - 1];
+        if (textOpen && last) {
+          last.text += text;
+          return;
+        }
+        if (!text.trim()) return;
         segments.push(seg(el, text));
+        textOpen = true;
       },
       oncomment(text) {
+        textOpen = false;
         if (text.trim()) segments.push({ channel: "comment", text, how: "HTML comment" });
       },
       onclosetag(name) {
+        textOpen = false;
         const i = stack.findLastIndex((e) => e.name === name);
         if (i >= 0) stack.length = i;
       },

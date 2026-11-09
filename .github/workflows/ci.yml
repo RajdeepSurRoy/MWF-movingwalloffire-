@@ -28,6 +28,9 @@ jobs:
         env:
           MWF_REQUIRE_RENDER: "1"
       # Prints the battery report. The M2 gate (0 false positives, obvious attacks blocked)
-      # is enforced by tests/harness/fixtures.test.ts in npm test. Persuasion is the planned
-      # v1 bypass until the red team (M8), so --strict would fail on purpose for now.
+      # is enforced by tests/harness/fixtures.test.ts in npm test. Persuasion stays the v1
+      # bypass until a person approves the red team's learned rule, so no --strict yet.
       - run: npm run harness
+      # The M8 learning loop end to end: exits 1 unless the learned rule holds the training
+      # seeds and all their mutations without holding a legitimate purchase.
+      - run: npm run redteam -- demo

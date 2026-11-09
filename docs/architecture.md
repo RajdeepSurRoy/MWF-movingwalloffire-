@@ -243,6 +243,12 @@ Shadow mode (log only) ──► canary (one tenant) ──► enforce
 - **Loosening, BLOCK and global rules** need human approval and get a new version number.
 - New **model versions** follow the same path as rules.
 - **Poisoning is an attack:** only confirmed feedback goes into training; feedback is rate-limited and weighted by the reporting tenant's trust.
+- **Built so far (M8, [redteam/](../redteam/README.md)):**
+  - The mutation engine, runner, attack ledger and the four levels.
+  - Level 3 uses word trigrams until M7's embeddings exist.
+  - Learned **claim rules** in the bundle: phrases and fingerprints, REVIEW only, with no page text in them.
+  - Backtest; shadow (`shadow_reasons` in the decision ledger) → enforce, each step human-approved.
+  - Not built yet: canary per tenant, and automatic moves to REVIEW.
 
 ## 9. Global protection across customers
 

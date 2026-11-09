@@ -45,6 +45,28 @@ export const RuleBundle = z.strictObject({
   output_rules: z.array(
     z.strictObject({ id: z.string().regex(/^[A-Z][A-Z0-9_.]+$/), pattern, decision: z.enum(["BLOCK", "REVIEW"]) }),
   ),
+  // Rules the red team learned from attacks that got through (claims.ts). They only ever hold an
+  // action for REVIEW: there is no field for a decision, so a learned rule cannot BLOCK.
+  // `shadow` rules run and are recorded but do not decide; a person promotes them to `enforced`.
+  claim_rules: z
+    .array(
+      z.strictObject({
+        id: z.string().regex(/^LRN\.[A-Z0-9_.]+$/),
+        description: z.string().max(300),
+        state: z.enum(["shadow", "enforced"]),
+        phrases: z.array(z.string().regex(/^[\p{Ll}\p{Lo}\p{N}#]+( [\p{Ll}\p{Lo}\p{N}#]+){1,3}$/u)).max(200),
+        fingerprints: z.array(z.string().regex(/^[0-9a-f]{64}$/)).max(1000),
+        // Where it came from, without any page content: attack-ledger family ids, the backtest
+        // it passed, and who approved it.
+        learned: z.strictObject({
+          families: z.array(z.string().max(80)).max(200),
+          backtest: z.strictObject({ caught: z.number().int(), of: z.number().int(), legit_broken: z.number().int(), weakened: z.number().int() }),
+          approved_by: z.string().max(80),
+          approved_at: z.iso.datetime(),
+        }),
+      }),
+    )
+    .default([]),
 });
 export type RuleBundle = z.infer<typeof RuleBundle>;
 

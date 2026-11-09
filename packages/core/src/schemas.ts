@@ -158,6 +158,8 @@ export const DecisionRecord = z.strictObject({
   model_hashes: z.record(z.string(), z.string()),
   action_hash: z.string().nullable(),
   graph_path: z.array(z.string()),
+  // What learned rules still in shadow would have added. Recorded for review; not the decision.
+  shadow_reasons: z.array(Reason).optional(),
   created_at: z.iso.datetime(),
 });
 export type DecisionRecord = z.infer<typeof DecisionRecord>;

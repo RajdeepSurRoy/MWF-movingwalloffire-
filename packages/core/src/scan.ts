@@ -224,6 +224,9 @@ export interface Span {
 export interface ItemAnalysis {
   findings: Finding[];
   spans: Span[];
+  // Every text of the item in page order, for the learned claim rules. Only filled when the
+  // bundle has claim rules.
+  texts?: string[];
 }
 
 // Most spans one item contributes to the graph; flagged spans are kept first.
@@ -247,7 +250,8 @@ function spansFrom(segments: { channel: Channel | "text"; text: string; how: str
   return spans.length <= MAX_SPANS_PER_ITEM ? spans : [...spans].sort((x, y) => rank(x) - rank(y) || x.index - y.index).slice(0, MAX_SPANS_PER_ITEM);
 }
 
-export function analyzeContextItem(item: ContextItem, bundle: RuleBundle, render?: RenderReport): ItemAnalysis {
+// `withTexts`: also return the item's texts (ItemAnalysis.texts).
+export function analyzeContextItem(item: ContextItem, bundle: RuleBundle, render?: RenderReport, withTexts = bundle.claim_rules.length > 0): ItemAnalysis {
   if (item.trust === "trusted") return { findings: [], spans: [] };
   const findings: Finding[] = [];
   const push = (f: Finding) => {
@@ -263,7 +267,11 @@ export function analyzeContextItem(item: ContextItem, bundle: RuleBundle, render
   if (item.content_type !== "text/html") {
     const text = matchChannel(bundle, [item.content], "text", item.id);
     text.findings.forEach(push);
-    return { findings, spans: spansFrom([{ channel: "text", text: item.content, how: "" }], text.marks) };
+    return {
+      findings,
+      spans: spansFrom([{ channel: "text", text: item.content, how: "" }], text.marks),
+      ...(withTexts && { texts: item.content.split(/\n+/).filter((t) => t.trim()) }),
+    };
   }
 
   const styles = pageStyles(item);
@@ -307,15 +315,33 @@ export function analyzeContextItem(item: ContextItem, bundle: RuleBundle, render
     result.findings.forEach(push);
     for (const [k, mark] of result.marks) marks.set(idxs[k]!, mark);
   }
-  return { findings, spans: spansFrom(tracked, marks) };
+  return {
+    findings,
+    spans: spansFrom(tracked, marks),
+    ...(withTexts && { texts: blockTexts(tracked) }),
+  };
+}
+
+// One text per block element and channel, in page order: what a reader takes as one piece of
+// writing, however many inline tags or entities split it.
+function blockTexts(segments: Segment[]): string[] {
+  const out: string[] = [];
+  let prev: Segment | undefined;
+  for (const s of segments) {
+    if (!s.text.trim()) continue;
+    if (prev && prev.block !== undefined && prev.block === s.block && prev.channel === s.channel) out[out.length - 1] += ` ${s.text}`;
+    else out.push(s.text);
+    prev = s;
+  }
+  return out.map((t) => t.replace(/\s+/g, " ").trim());
 }
 
 export function scanContext(items: ContextItem[], bundle: RuleBundle, renders?: RenderReports): Finding[] {
   return items.flatMap((i) => scanContextItem(i, bundle, renders?.[hashCanonical(i)]));
 }
 
-export function analyzeContext(items: ContextItem[], bundle: RuleBundle, renders?: RenderReports): ItemAnalysis[] {
-  return items.map((i) => analyzeContextItem(i, bundle, renders?.[hashCanonical(i)]));
+export function analyzeContext(items: ContextItem[], bundle: RuleBundle, renders?: RenderReports, withTexts?: boolean): ItemAnalysis[] {
+  return items.map((i) => analyzeContextItem(i, bundle, renders?.[hashCanonical(i)], withTexts));
 }
 
 // Scans free text (a user prompt, an agent output) as if a human could see all of it.

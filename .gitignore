@@ -35,5 +35,7 @@ spikes/**/.state.json
 
 # Local firewall database (SQLite + WAL files)
 data/
+# ...but the red team's ledger, candidates and benign corpus are part of the repo
+!redteam/data/
 *.db-wal
 *.db-shm

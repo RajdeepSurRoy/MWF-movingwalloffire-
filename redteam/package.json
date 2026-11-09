@@ -1,0 +1,14 @@
+{
+  "name": "@mwf/redteam",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "redteam": "tsx src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@mwf/core": "0.0.0",
+    "@mwf/tests": "0.0.0"
+  }
+}

@@ -11,5 +11,8 @@
     "@mwf/core": "0.0.0",
     "@mwf/render": "0.0.0",
     "playwright": "1.64.1"
+  },
+  "exports": {
+    "./harness": "./harness/harness.ts"
   }
 }

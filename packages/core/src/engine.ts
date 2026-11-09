@@ -5,6 +5,7 @@ import { type RuleBundle, getDefaultBundle, regex } from "./rules.js";
 import type { RenderReports } from "./rendered.js";
 import { type Graph, actionGraph, actionId, contextGraph, taintPaths } from "./provenance.js";
 import { type Finding, analyzeContext, scanText } from "./scan.js";
+import { checkClaims } from "./claims.js";
 import {
   type ContextItem,
   type DecisionResult,
@@ -20,7 +21,9 @@ import {
 // 1.1: provenance graph, cross-element matching. 1.2: encoded canaries.
 // 1.3: several categories, fees, checkout origin, session spending; a repeated signal counts once.
 // 1.4: commit checks what the outside system actually prepared (two-phase commit; payments first).
-export const POLICY_VERSION = "1.4.0";
+// 1.5: learned claim rules from the red team (REVIEW only; shadow rules recorded, not enforced).
+//      Text the parser splits at entities is read as one text.
+export const POLICY_VERSION = "1.5.0";
 
 export interface EngineResult extends DecisionResult {
   // Context findings behind the decision, and how much they add to the session risk score.
@@ -30,6 +33,9 @@ export interface EngineResult extends DecisionResult {
   // from the attack point to the action), when there is one.
   graph?: Graph;
   path?: string[];
+  // What learned rules still in shadow would have added. Recorded for the backtest and the
+  // console; never part of the decision.
+  shadow?: Reason[];
 }
 
 const reason = (rule_id: string, message: string, ref?: string): Reason =>
@@ -247,6 +253,10 @@ export function checkAction(input: ActionCheckInput, bundle = getDefaultBundle()
     (p.signal === "hard" ? block : review).push(reason("PROV.TAINTED_VALUE", `The action's ${what} comes from ${p.signal}-flagged ${where}`, String(span?.item_id)));
   }
 
+  // Learned claim rules: the item bought is the one an untrusted page talked the agent into.
+  const claims = checkClaims(input.context, analyses.map((a) => a.texts ?? []), action, bundle);
+  review.push(...claims.enforced);
+
   const risk = findingRisk(findings, bundle);
   const total = (input.priorRisk ?? 0) + risk;
   if (block.length === 0 && review.length === 0 && total >= bundle.risk.review_threshold) {
@@ -254,7 +264,7 @@ export function checkAction(input: ActionCheckInput, bundle = getDefaultBundle()
   }
   const result = combine(block, review, findings, risk);
   const path = result.decision === "ALLOW" ? undefined : paths[0]?.nodes;
-  return { ...result, graph, ...(path && { path }) };
+  return { ...result, graph, ...(path && { path }), ...(claims.shadow.length > 0 && { shadow: claims.shadow }) };
 }
 
 // ---------------------------------------------------------------------------

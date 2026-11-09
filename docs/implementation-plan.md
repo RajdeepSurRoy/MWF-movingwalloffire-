@@ -222,6 +222,17 @@ MWF is a check-and-record layer: it never executes an action, never calls the ou
 5. **Backtest:** run the candidate rule bundle over the full legitimate set and all past attacks; report "blocks N new variants, breaks M of 50 legit purchases".
 6. **Rollout states:** shadow → approved → enforced; approval bumps the rule bundle version. No automatic BLOCK rules.
    - *Done when:* the demo story works from a script: a persuasion seed bypasses v1 → runner flags it → candidate rule → backtest clean → approve → v2 blocks the seed **and its mutations**.
+7. **Status 2026-11-09: built; the done-when runs as `npm run redteam -- demo` (and in CI).** Details and numbers in [redteam/README.md](../redteam/README.md).
+   - **Learned rules are claim rules:** the bought item is named in a promotional claim on an untrusted page. They match on phrases or fingerprints and are REVIEW only (the schema has no BLOCK for them). Shadow rules are recorded as `shadow_reasons` in the decision ledger. Policy 1.5.0, bundle 1.5.0.
+   - **Demo:** 5 training seeds bypass v1 (119 of 140 with their variants). After learn, backtest (0 of 52 legitimate held), approve (shadow) and enforce, 0 get through.
+   - **Unseen seeds:** 101 of 140 still get through. Phrase rules cover known families, not new wording; that is level 3 with M7's embeddings.
+   - **Candidate `LRN.CLAIM.CCB11DF2`** (from all 10 persuasion seeds) catches 265 of 265 bypasses, with 0 legitimate purchases held. It waits for a person's approval; approving it takes the battery's ASR to 0%.
+   - **Found and fixed on the way:** text split at HTML entities ("ign&#111;re") was read as separate pieces by every rule. Texts with no tag between them are now one.
+   - **Not done:**
+     - level 3 with real embeddings (M7)
+     - more root-cause templates
+     - cross-tenant sharing with corroboration
+     - a console page for candidates (M9)
 
 ## M9 — Console, Trust Score, Security Passport (Nov 9–12)
 

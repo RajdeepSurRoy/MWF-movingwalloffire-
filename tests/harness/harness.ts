@@ -6,10 +6,12 @@ import {
   type MerchantRecord,
   type RenderReport,
   type RenderReports,
+  type RuleBundle,
   type TestCase,
   TestCase as TestCaseSchema,
   checkAction,
   checkCommit,
+  getDefaultBundle,
   hashCanonical,
 } from "@mwf/core";
 
@@ -42,12 +44,15 @@ export interface CaseResult {
   actual: DecisionResult["decision"];
   decidedAt: "action" | "commit";
   reasons: DecisionResult["reasons"];
+  // What learned rules still in shadow would have added (checkAction's `shadow`).
+  shadow?: DecisionResult["reasons"];
 }
 
 // Runs one case through the decision logic only: no network, no PayPal.
 // The check runs first; only an ALLOW goes on to commit, as in production.
 // `renders`: headless-browser views of the case's pages (see renderCase); omitted, static scan only.
-export function runCase(c: TestCase, merchants: MerchantRecord[] = loadMerchants(), renders?: RenderReports): CaseResult {
+// `bundle`: the rule bundle to decide with (the red team backtests candidate bundles).
+export function runCase(c: TestCase, merchants: MerchantRecord[] = loadMerchants(), renders?: RenderReports, bundle: RuleBundle = getDefaultBundle()): CaseResult {
   const base = { id: c.id, category: c.category, expected: c.expected.decision };
   const check = checkAction({
     mandate: c.mandate,
@@ -56,15 +61,16 @@ export function runCase(c: TestCase, merchants: MerchantRecord[] = loadMerchants
     now: new Date(c.now),
     merchants,
     ...(renders && { renders }),
-  });
-  if (check.decision !== "ALLOW") return { ...base, actual: check.decision, decidedAt: "action", reasons: check.reasons };
+  }, bundle);
+  const shadow = check.shadow ? { shadow: check.shadow } : {};
+  if (check.decision !== "ALLOW") return { ...base, actual: check.decision, decidedAt: "action", reasons: check.reasons, ...shadow };
 
   const approvedActionHash = hashCanonical(c.action);
   let commit = checkCommit({ approvedActionHash, executedAction: c.commit_action ?? c.action, alreadyCommitted: false });
   if (c.replay_commit && commit.decision === "ALLOW") {
     commit = checkCommit({ approvedActionHash, executedAction: c.action, alreadyCommitted: true });
   }
-  return { ...base, actual: commit.decision, decidedAt: "commit", reasons: commit.reasons };
+  return { ...base, actual: commit.decision, decidedAt: "commit", reasons: commit.reasons, ...shadow };
 }
 
 // Renders the case's untrusted HTML pages, as the API does at the context checkpoint.
