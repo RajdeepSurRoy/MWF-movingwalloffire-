@@ -49,7 +49,8 @@ export async function loadEmbedder(model: ModelSpec = MINILM, { cacheDir = proce
   env.allowRemoteModels = download;
   env.allowLocalModels = false;
   const extractor = await pipeline("feature-extraction", model.name, { revision: model.revision, dtype: "q8" });
-  const path = join(cacheDir, model.name, model.file);
+  // A pinned revision is cached under its own folder; that is the file the pipeline loaded.
+  const path = join(cacheDir, model.name, model.revision, model.file);
   if (!existsSync(path)) throw new Error(`model file not found at ${path}`);
   const actual = await sha256File(path);
   if (actual !== model.sha256) throw new Error(`model ${model.name} has hash ${actual}, expected ${model.sha256}`);
