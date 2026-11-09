@@ -4,6 +4,7 @@
 //   npm run harness -- --strict          exit 1 unless ASR = 0, FPR = 0 and every case matches
 //   npm run harness -- --render          also render every page in headless Chromium
 import { writeFileSync } from "node:fs";
+import { POLICY_VERSION, getDefaultBundle } from "@mwf/core";
 import { PageRenderer } from "@mwf/render";
 import { type CaseResult, harnessSensors, loadCases, loadMerchants, renderCase, runCase, summarize } from "./harness.js";
 
@@ -41,7 +42,11 @@ if (report.mismatches.length) {
   for (const m of report.mismatches) console.log(`  ${m.id}: expected ${m.expected}, got ${m.actual} at ${m.decidedAt} [${m.reasons.map((r) => r.rule_id).join(", ")}]`);
 }
 
-if (jsonPath) writeFileSync(jsonPath, JSON.stringify(report, null, 2) + "\n");
+// With the versions it ran against, so the console and the evidence name what was tested.
+if (jsonPath) {
+  const meta = { generated_at: new Date().toISOString(), policy_version: POLICY_VERSION, rule_bundle_version: getDefaultBundle().version };
+  writeFileSync(jsonPath, JSON.stringify({ ...meta, ...report }, null, 2) + "\n");
+}
 
 if (strict && (report.attackSuccessRate > 0 || report.falsePositiveRate > 0 || report.mismatches.length > 0)) {
   console.error(`\n✖ strict mode: ${report.mismatches.length} cases do not match ground truth`);

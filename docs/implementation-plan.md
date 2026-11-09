@@ -263,6 +263,17 @@ MWF is a check-and-record layer: it never executes an action, never calls the ou
 3. **Live feed:** decisions as they happen during the demo.
 4. **Trust Score (0–100):** computed only from harness results; every number links to test IDs.
 5. **Security Passport:** downloadable JSON + readable view (suite version, policy version, results by category, sandbox evidence IDs, report hash).
+6. **Status 2026-11-10 (cut for the Nov 12 shortlisting submission): console MVP built.**
+   - **Where:** served by the firewall API at `/console`, not a separate Next.js app. It is static HTML/JS, and the data comes from `/v1/console/*` with the tenant's API key.
+     - The page renders every value as text, under a CSP with no inline script.
+     - Each tenant sees only its own decisions.
+   - **Pages:**
+     - **Live decisions** (polled every 2 s), with totals.
+     - **Decision detail:** the reasons, the **attack path** (flagged page text → value in the action → action), shadow notes, sensor scores, and the versions and hashes.
+     - **Rules & sensors:** learned rules and sensors with their state, backtest and approver. Enforcing still runs from the command line, and the page shows the command.
+     - **Test battery:** the last `npm run harness -- --json evidence/battery-report.json` report.
+   - `npm run console:demo` starts it on a fresh local database and replays fixture purchases and attacks through the API.
+   - **Cut for now:** a separate Trust Score, a downloadable Passport, approving from the page, and held-action approve/reject.
    - *Done when:* a judge can follow one attack from page to blocked payment in the UI without explanation.
 
 ## M10 — End-to-end hardening and evidence (Nov 12–13)

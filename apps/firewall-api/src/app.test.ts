@@ -373,3 +373,70 @@ describe("firewall API with an embedding sensor", () => {
     expect(embedded).toEqual([]);
   });
 });
+
+describe("console", () => {
+  let db: ReturnType<typeof openDatabase>;
+  let app: ReturnType<typeof buildApp>;
+  const keyOf = (tenant: string) => ({ authorization: `Bearer ${createApiKey(db, tenant, "test").key}` });
+
+  beforeEach(() => {
+    db = openDatabase(":memory:");
+    app = buildApp({ db, reportPath: "does/not/exist.json" });
+    upsertMerchant(db, "tenant-a", { id: "shop-a", name: "Shop A", payee_emails: ["payments@shop-a.example"] });
+  });
+
+  const post = (url: string, payload: unknown, headers: object) => app.inject({ method: "POST", url, headers: headers as Record<string, string>, payload: payload as object });
+  const get = (url: string, headers: object = {}) => app.inject({ method: "GET", url, headers: headers as Record<string, string> });
+
+  async function decide(headers: object, page: object) {
+    const id = (await post("/v1/sessions", { prompt: mandate.intent_text, mandate }, headers)).json().session_id as string;
+    await post("/v1/context/inspect", { session_id: id, items: [page] }, headers);
+    return (await post("/v1/actions/check", { session_id: id, action }, headers)).json();
+  }
+
+  it("serves the page with a strict content security policy, and no data without a key", async () => {
+    const page = await get("/console");
+    expect(page.statusCode).toBe(200);
+    expect(page.headers["content-security-policy"]).toContain("script-src 'self'");
+    expect(page.headers["content-security-policy"]).not.toContain("unsafe-inline");
+    expect((await get("/console/app.js")).headers["content-type"]).toContain("javascript");
+    expect((await get("/v1/console/decisions")).statusCode).toBe(401);
+  });
+
+  it("lists only the tenant's own decisions, newest first, and only newer ones after a cursor", async () => {
+    const a = keyOf("tenant-a");
+    const b = keyOf("tenant-b");
+    await decide(a, cleanPage);
+    const first = (await get("/v1/console/decisions", a)).json();
+    expect(first.decisions.map((d: { checkpoint: string }) => d.checkpoint)).toEqual(["action", "context", "intent"]);
+    expect(first.decisions[0]).toMatchObject({ decision: "ALLOW", intent: mandate.intent_text });
+    expect(first.totals).toEqual({ ALLOW: 3 });
+    expect((await get("/v1/console/decisions", b)).json().decisions).toEqual([]);
+
+    await decide(a, hiddenPage);
+    const newer = (await get(`/v1/console/decisions?after=${first.decisions[0].seq}`, a)).json();
+    expect(newer.decisions).toHaveLength(3);
+    expect(newer.decisions[0].decision).not.toBe("ALLOW");
+  });
+
+  it("shows a decision with its attack path to its own tenant only", async () => {
+    const a = keyOf("tenant-a");
+    const check = await decide(a, hiddenPage);
+    const detail = (await get(`/v1/console/decisions/${check.decision_id}`, a)).json();
+    expect(detail.decision.reasons.length).toBeGreaterThan(0);
+    expect(detail.path.length).toBeGreaterThan(1);
+    expect(detail.path.at(-1).type).toBe("action");
+    expect(detail.path.some((n: { attrs: { signal?: string } }) => n.attrs.signal === "hard")).toBe(true);
+    expect((await get(`/v1/console/decisions/${check.decision_id}`, keyOf("tenant-b"))).statusCode).toBe(404);
+    expect((await get("/v1/console/decisions/not-a-uuid", a)).statusCode).toBe(400);
+  });
+
+  it("shows the rules deciding now and says when there is no battery report", async () => {
+    const a = keyOf("tenant-a");
+    const rules = (await get("/v1/console/rules", a)).json();
+    expect(rules.rule_bundle_version).toBe(getDefaultBundle().version);
+    expect(rules.claim_rules[0]).toMatchObject({ state: "enforced" });
+    expect(JSON.stringify(rules)).not.toContain("weights");
+    expect((await get("/v1/console/report", a)).statusCode).toBe(404);
+  });
+});

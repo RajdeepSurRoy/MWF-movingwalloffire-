@@ -19,7 +19,8 @@
     "ledger:verify": "npm run cli -w @mwf/firewall-api -- ledger:verify",
     "harness": "npm run harness -w @mwf/tests --",
     "merchants:add": "npm run cli -w @mwf/firewall-api -- merchants:add",
-    "redteam": "npm run redteam -w @mwf/redteam --"
+    "redteam": "npm run redteam -w @mwf/redteam --",
+    "console:demo": "npm run console-demo -w @mwf/tests --"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

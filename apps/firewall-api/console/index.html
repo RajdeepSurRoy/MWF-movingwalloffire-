@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MWF Console</title>
+  <link rel="stylesheet" href="/console/style.css">
+  <script src="/console/app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <div class="name">Moving Wall of Fire</div>
+        <div class="sub">Firewall console</div>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist" hidden>
+      <button role="tab" data-tab="decisions" aria-selected="true">Decisions</button>
+      <button role="tab" data-tab="rules" aria-selected="false">Rules &amp; sensors</button>
+      <button role="tab" data-tab="battery" aria-selected="false">Test battery</button>
+    </nav>
+    <div class="who">
+      <span id="versions" class="muted"></span>
+      <button id="disconnect" class="ghost" hidden>Disconnect</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="connect" class="connect">
+      <h1>Connect to your tenant</h1>
+      <p class="muted">Paste your MWF API key. It stays in this browser tab only and is sent to this server as a bearer token, never in a URL.</p>
+      <form id="connect-form" autocomplete="off">
+        <input id="key" type="password" placeholder="mwf_sk_…" aria-label="API key" required>
+        <button type="submit">Connect</button>
+      </form>
+      <p id="connect-error" class="error" role="alert"></p>
+    </section>
+
+    <section id="decisions" class="panel" hidden>
+      <div class="totals" id="totals"></div>
+      <div class="split">
+        <div class="feed">
+          <div class="feed-head">
+            <h2>Live decisions</h2>
+            <span class="live"><span class="dot" aria-hidden="true"></span>live</span>
+          </div>
+          <table>
+            <thead><tr><th>Time</th><th>Checkpoint</th><th>Decision</th><th>Request</th><th>Why</th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+          <p id="empty" class="muted empty" hidden>No decisions yet. Run an agent against the API and they appear here as they happen.</p>
+        </div>
+        <aside class="detail" id="detail">
+          <p class="muted">Select a decision to see why it was made and the path from the page that caused it to the action.</p>
+        </aside>
+      </div>
+    </section>
+
+    <section id="rules" class="panel" hidden></section>
+    <section id="battery" class="panel" hidden></section>
+  </main>
+</body>
+</html>

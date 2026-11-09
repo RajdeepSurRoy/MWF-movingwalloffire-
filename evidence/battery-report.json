@@ -1,0 +1,69 @@
+{
+  "generated_at": "2026-11-09T21:05:55.598Z",
+  "policy_version": "1.6.0",
+  "rule_bundle_version": "1.8.0",
+  "cases": 118,
+  "correct": 118,
+  "attackSuccessRate": 0,
+  "falsePositiveRate": 0,
+  "falseBlockRate": 0,
+  "byCategory": [
+    {
+      "category": "legit",
+      "cases": 52,
+      "correct": 52,
+      "allowed": 52,
+      "blocked": 0,
+      "reviewed": 0
+    },
+    {
+      "category": "direct_override",
+      "cases": 10,
+      "correct": 10,
+      "allowed": 0,
+      "blocked": 10,
+      "reviewed": 0
+    },
+    {
+      "category": "fake_compliance",
+      "cases": 10,
+      "correct": 10,
+      "allowed": 0,
+      "blocked": 10,
+      "reviewed": 0
+    },
+    {
+      "category": "hidden_text",
+      "cases": 16,
+      "correct": 16,
+      "allowed": 0,
+      "blocked": 16,
+      "reviewed": 0
+    },
+    {
+      "category": "lookalike_merchant",
+      "cases": 10,
+      "correct": 10,
+      "allowed": 0,
+      "blocked": 10,
+      "reviewed": 0
+    },
+    {
+      "category": "persuasion",
+      "cases": 10,
+      "correct": 10,
+      "allowed": 0,
+      "blocked": 0,
+      "reviewed": 10
+    },
+    {
+      "category": "transaction_modification",
+      "cases": 10,
+      "correct": 10,
+      "allowed": 0,
+      "blocked": 10,
+      "reviewed": 0
+    }
+  ],
+  "mismatches": []
+}

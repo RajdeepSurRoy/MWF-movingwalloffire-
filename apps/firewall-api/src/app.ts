@@ -32,6 +32,7 @@ import {
 } from "@mwf/core";
 import { authenticate } from "./auth.js";
 import { openDatabase, saveGraph } from "./store.js";
+import { DEFAULT_REPORT, consolePages, consoleRoutes } from "./console.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -90,7 +91,8 @@ export function buildApp({
   bundle = getDefaultBundle(),
   render,
   embed,
-}: { db?: DatabaseSync; bundle?: RuleBundle; render?: Render; embed?: Embed } = {}) {
+  reportPath = DEFAULT_REPORT,
+}: { db?: DatabaseSync; bundle?: RuleBundle; render?: Render; embed?: Embed; reportPath?: string } = {}) {
   const app = Fastify({ logger: false, bodyLimit: 1_048_576 });
   const ledger = new Ledger(db);
 
@@ -109,12 +111,14 @@ export function buildApp({
 
   // Every /v1 route lives in this plugin, so its auth hook applies to the matched routes
   // whatever the URL encoding. Routes outside it (only /healthz) are public.
-  app.register(async (v1) => v1Routes(v1, db, ledger, bundle, render, embed), { prefix: "/v1" });
+  app.register(async (v1) => v1Routes(v1, db, ledger, bundle, render, embed, reportPath), { prefix: "/v1" });
+  // The console page (static, no data); its data is under /v1/console with the tenant's key.
+  consolePages(app);
 
   return app;
 }
 
-function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle: RuleBundle, render: Render | undefined, embed: Embed | undefined) {
+function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle: RuleBundle, render: Render | undefined, embed: Embed | undefined, reportPath: string) {
   v1.addHook("onRequest", async (req, reply) => {
     const tenant = authenticate(db, req.headers.authorization);
     if (!tenant) return reply.code(401).send({ error: "unauthorized" });
@@ -126,6 +130,7 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     if (!req.tenantId) throw Object.assign(new Error("unauthenticated"), { statusCode: 401 });
     return req.tenantId;
   };
+  consoleRoutes(v1, db, bundle, tenantOf, reportPath);
 
   function loadSession(tenantId: string, sessionId: string) {
     const row = db.prepare("SELECT mandate, canary, risk_score FROM sessions WHERE id = ? AND tenant_id = ?").get(sessionId, tenantId) as
