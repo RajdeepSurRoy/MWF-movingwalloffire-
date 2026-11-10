@@ -62,6 +62,15 @@ const OutcomeBody = z.strictObject({
   external_ids: PreparedEffect.shape.external_ids,
 });
 const ReleaseActionBody = z.strictObject({ session_id: SessionId, action_token: z.string().min(1).max(200) });
+// A person's answer to a REVIEW, collected by the integration in its own UI (never by the model).
+const ReviewActionBody = z.strictObject({
+  session_id: SessionId,
+  review_token: z.string().min(1).max(200),
+  verdict: z.enum(["approve", "reject"]),
+  // Who answered: the end user the agent works for, or the integrating business's own staff.
+  reviewer: z.enum(["end_user", "operator"]),
+  note: z.string().max(2000).optional(),
+});
 const CheckOutputBody = z.strictObject({
   session_id: SessionId,
   output: z.strictObject({ content: z.string().max(500_000), destination: z.string().max(2000).optional() }),
@@ -280,7 +289,9 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     return { ...respond(rec), items: body.items.map((i) => ({ id: i.id, quarantined: quarantined.has(i.id) })) };
   });
 
-  // Checkpoint 3 — action check. The only place ALLOW is decided; only ALLOW gets a token.
+  // Checkpoint 3 — action check. The only place ALLOW is decided. ALLOW gets an action token;
+  // REVIEW gets a review token, which can be committed only after a person approves it; BLOCK
+  // gets nothing.
   v1.post("/actions/check", async (req) => {
     const tenantId = tenantOf(req);
     const body = CheckActionBody.parse(req.body);
@@ -314,9 +325,10 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     addRisk(body.session_id, result);
     if (result.graph) saveGraph(db, body.session_id, result.graph);
     const rec = record(tenantId, "action", body.session_id, result, actionHash);
-    if (result.decision !== "ALLOW") return { ...respond(rec), action_hash: actionHash, action_token: null };
+    if (result.decision === "BLOCK") return { ...respond(rec), action_hash: actionHash, action_token: null };
+    const review = result.decision === "REVIEW";
 
-    const token = secret("mwf_at_");
+    const token = secret(review ? "mwf_rt_" : "mwf_at_");
     const idempotencyKey = randomUUID();
     const expiresAt = new Date(Date.now() + bundle.action_token_ttl_seconds * 1000).toISOString();
     const payment = PaymentArgs.safeParse(body.action.args);
@@ -327,8 +339,21 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
       actionHash,
     );
     db.prepare(
-      "INSERT INTO action_tokens (token_hash, session_id, action_hash, created_at, expires_at, idempotency_key, amount_cents) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    ).run(hashCanonical(token), body.session_id, actionHash, rec.created_at, expiresAt, idempotencyKey, payment.success ? toCents(payment.data.total) : 0);
+      "INSERT INTO action_tokens (token_hash, session_id, action_hash, created_at, expires_at, idempotency_key, amount_cents, review_status, review_decision_id, review_reasons) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      hashCanonical(token),
+      body.session_id,
+      actionHash,
+      rec.created_at,
+      expiresAt,
+      idempotencyKey,
+      payment.success ? toCents(payment.data.total) : 0,
+      review ? "pending" : null,
+      review ? rec.id : null,
+      review ? JSON.stringify([...new Set(rec.reasons.map((r) => r.rule_id))]) : null,
+    );
+    // A held action: its money stays reserved while a person decides; nothing can commit it yet.
+    if (review) return { ...respond(rec), action_hash: actionHash, action_token: null, review_token: token, expires_at: expiresAt };
     // Use idempotency_key as PayPal-Request-Id so a retried capture cannot charge twice.
     return { ...respond(rec), action_hash: actionHash, action_token: token, idempotency_key: idempotencyKey, expires_at: expiresAt };
   });
@@ -341,8 +366,8 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
     const tokenHash = hashCanonical(body.action_token);
     const now = new Date();
     const token = db
-      .prepare("SELECT action_hash, committed_at, expires_at FROM action_tokens WHERE token_hash = ? AND session_id = ?")
-      .get(tokenHash, body.session_id) as { action_hash: string; committed_at: string | null; expires_at: string } | undefined;
+      .prepare("SELECT action_hash, committed_at, expires_at, review_status FROM action_tokens WHERE token_hash = ? AND session_id = ?")
+      .get(tokenHash, body.session_id) as { action_hash: string; committed_at: string | null; expires_at: string; review_status: string | null } | undefined;
     const prepared = body.prepared;
     // Something the system prepared that is already bound to another approved action cannot
     // settle this one.
@@ -366,6 +391,14 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
         expired: Date.parse(token.expires_at) <= now.getTime(),
         ...(prepared && { prepared, merchants: loadMerchants(tenantId) }),
       });
+      // A held action commits only once a person approved it.
+      if (token.review_status === "pending" || token.review_status === "rejected") {
+        const held = {
+          rule_id: "COMMIT.REVIEW_NOT_APPROVED",
+          message: `This action was held for review and is ${token.review_status === "pending" ? "not approved yet" : "rejected"}`,
+        };
+        result = { ...result, decision: "BLOCK", reasons: [held, ...(result.decision === "ALLOW" ? [] : result.reasons)] };
+      }
       if (preparedTaken) {
         const reused = { rule_id: "COMMIT.EFFECT_REUSED", message: "This prepared action was already committed for another action" };
         result = { ...result, decision: "BLOCK", reasons: [reused, ...(result.decision === "ALLOW" ? [] : result.reasons)] };
@@ -411,6 +444,47 @@ function v1Routes(v1: FastifyInstance, db: DatabaseSync, ledger: Ledger, bundle:
       .prepare("UPDATE action_tokens SET expires_at = ? WHERE token_hash = ? AND session_id = ? AND committed_at IS NULL")
       .run(new Date().toISOString(), hashCanonical(body.action_token), body.session_id).changes;
     return { released: released > 0 };
+  });
+
+  // A person's answer to a REVIEW. The integration asks in its own UI (the model never answers),
+  // and the answer is written to the ledger with the held decision's reasons. Approving refreshes
+  // the token's expiry so the commit can follow; it does not skip the commit check, which still
+  // compares what is executed with what was held. A BLOCK has no review token, so it cannot be
+  // approved.
+  v1.post("/actions/review", async (req, reply) => {
+    const tenantId = tenantOf(req);
+    const body = ReviewActionBody.parse(req.body);
+    loadSession(tenantId, body.session_id);
+    const tokenHash = hashCanonical(body.review_token);
+    const row = db
+      .prepare("SELECT action_hash, committed_at, expires_at, review_status, review_decision_id, review_reasons FROM action_tokens WHERE token_hash = ? AND session_id = ?")
+      .get(tokenHash, body.session_id) as
+      | { action_hash: string; committed_at: string | null; expires_at: string; review_status: string | null; review_decision_id: string | null; review_reasons: string | null }
+      | undefined;
+    if (!row || row.review_status === null) throw new NotFound();
+    if (row.review_status !== "pending" || row.committed_at !== null) {
+      return reply.code(409).send({ error: "already_reviewed", review_status: row.review_status });
+    }
+    const now = new Date();
+    if (Date.parse(row.expires_at) <= now.getTime()) return reply.code(409).send({ error: "expired" });
+    const approved = body.verdict === "approve";
+    const expiresAt = approved ? new Date(now.getTime() + bundle.action_token_ttl_seconds * 1000).toISOString() : now.toISOString();
+    const changed = db
+      .prepare("UPDATE action_tokens SET review_status = ?, expires_at = ? WHERE token_hash = ? AND review_status = 'pending'")
+      .run(approved ? "approved" : "rejected", expiresAt, tokenHash).changes;
+    if (changed === 0) return reply.code(409).send({ error: "already_reviewed" });
+    const entry = ledger.append("review", {
+      tenant_id: tenantId,
+      session_id: body.session_id,
+      decision_id: row.review_decision_id,
+      action_hash: row.action_hash,
+      verdict: body.verdict,
+      reviewer: body.reviewer,
+      ...(body.note && { note: body.note }),
+      held_for: row.review_reasons ? (JSON.parse(row.review_reasons) as string[]) : [],
+      recorded_at: now.toISOString(),
+    });
+    return { review_status: approved ? "approved" : "rejected", ledger_seq: entry.seq, ...(approved && { expires_at: expiresAt }) };
   });
 
   // How a prepared action ended. The firewall never executes anything itself: this records what

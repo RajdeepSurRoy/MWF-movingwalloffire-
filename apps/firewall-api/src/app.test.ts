@@ -124,6 +124,73 @@ describe("firewall API", () => {
     });
   });
 
+  describe("a purchase held for review", () => {
+    // A quarantined page the purchase did not rely on: REVIEW (CTX.QUARANTINED_IN_SESSION), not BLOCK.
+    const unrelated = { ...action, derived_from: [] };
+    async function held() {
+      const { id } = await newSession();
+      await post("/v1/context/inspect", { session_id: id, items: [hiddenPage] });
+      const check = (await post("/v1/actions/check", { session_id: id, action: unrelated })).json();
+      return { id, check, review_token: check.review_token as string };
+    }
+    const review = (id: string, review_token: string, verdict = "approve", headers = auth) =>
+      post("/v1/actions/review", { session_id: id, review_token, verdict, reviewer: "end_user" }, headers);
+
+    it("gets a review token, not an action token, and cannot be committed before a person approves", async () => {
+      const { id, check, review_token } = await held();
+      expect(check).toMatchObject({ decision: "REVIEW", action_token: null });
+      expect(check.reasons.map((r: { rule_id: string }) => r.rule_id)).toContain("CTX.QUARANTINED_IN_SESSION");
+      expect(review_token).toMatch(/^mwf_rt_/);
+      const commit = await post("/v1/actions/commit", { session_id: id, action_token: review_token, action: unrelated });
+      expect(commit.json()).toMatchObject({ decision: "BLOCK", reasons: [{ rule_id: "COMMIT.REVIEW_NOT_APPROVED" }] });
+    });
+
+    it("commits once approved, and records who approved what in the ledger", async () => {
+      const { id, review_token } = await held();
+      const approved = await review(id, review_token);
+      expect(approved.json()).toMatchObject({ review_status: "approved" });
+      expect((await review(id, review_token)).statusCode).toBe(409);
+      const commit = await post("/v1/actions/commit", { session_id: id, action_token: review_token, action: unrelated });
+      expect(commit.json().decision).toBe("ALLOW");
+      const entry = db.prepare("SELECT payload FROM ledger WHERE kind = 'review'").get() as { payload: string };
+      expect(JSON.parse(entry.payload)).toMatchObject({ verdict: "approve", reviewer: "end_user", held_for: expect.arrayContaining(["CTX.QUARANTINED_IN_SESSION"]) });
+      expect(new Ledger(db).verify().ok).toBe(true);
+    });
+
+    it("still compares what is executed with what was held", async () => {
+      const { id, review_token } = await held();
+      await review(id, review_token);
+      const changed = { ...unrelated, args: { ...unrelated.args, total: { value: "17.99", currency: "USD" } } };
+      const commit = await post("/v1/actions/commit", { session_id: id, action_token: review_token, action: changed });
+      expect(commit.json()).toMatchObject({ decision: "BLOCK", reasons: [{ rule_id: "COMMIT.HASH_MISMATCH" }] });
+    });
+
+    it("cannot be committed once rejected", async () => {
+      const { id, review_token } = await held();
+      expect((await review(id, review_token, "reject")).json()).toMatchObject({ review_status: "rejected" });
+      const commit = await post("/v1/actions/commit", { session_id: id, action_token: review_token, action: unrelated });
+      expect(commit.json().decision).toBe("BLOCK");
+    });
+
+    it("cannot approve a BLOCK, an ALLOW token, another tenant's review or a bad verdict", async () => {
+      const { id } = await newSession();
+      await post("/v1/context/inspect", { session_id: id, items: [hiddenPage] });
+      const blocked = (await post("/v1/actions/check", { session_id: id, action })).json();
+      expect(blocked).toMatchObject({ decision: "BLOCK", action_token: null });
+      expect(blocked.review_token).toBeUndefined();
+
+      const clean = await sessionWith(cleanPage);
+      const { action_token } = (await post("/v1/actions/check", { session_id: clean, action })).json();
+      expect((await review(clean, action_token)).statusCode).toBe(404);
+
+      const h = await held();
+      const other = { authorization: `Bearer ${createApiKey(db, "tenant-b", "test").key}` };
+      expect((await review(h.id, h.review_token, "approve", other)).statusCode).toBe(404);
+      expect((await review(h.id, h.review_token, "maybe")).statusCode).toBe(400);
+      expect((await review(h.id, "mwf_rt_forged")).statusCode).toBe(404);
+    });
+  });
+
   describe("attacks", () => {
     it("quarantines a page with a hidden instruction and blocks the action that relied on it", async () => {
       const { id } = await newSession();

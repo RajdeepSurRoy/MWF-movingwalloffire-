@@ -133,6 +133,11 @@ export function openDatabase(path: string): DatabaseSync {
   addColumnIfMissing(db, "action_tokens", "prepared_system", "TEXT");
   addColumnIfMissing(db, "action_tokens", "prepared_reference", "TEXT");
   addColumnIfMissing(db, "action_tokens", "outcome", "TEXT");
+  // A token issued for a REVIEW: pending until a person approves it (or rejects it) through
+  // /v1/actions/review; it cannot be committed before. NULL for a token issued on ALLOW.
+  addColumnIfMissing(db, "action_tokens", "review_status", "TEXT");
+  addColumnIfMissing(db, "action_tokens", "review_decision_id", "TEXT");
+  addColumnIfMissing(db, "action_tokens", "review_reasons", "TEXT");
   // Indexes of an earlier draft of this table, over columns no longer used.
   db.exec("DROP INDEX IF EXISTS action_tokens_hold");
   db.exec("DROP INDEX IF EXISTS action_tokens_tenant_hold");
