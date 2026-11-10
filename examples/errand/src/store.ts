@@ -644,7 +644,8 @@ export async function placeOrder(details: DeliveryDetails, approvedTotalCents: n
     }
     await page.waitForURL(/\/orders\/FC-[A-Z0-9]{6}/, { timeout: 15_000 });
   } catch (error) {
-    if (error instanceof StoreError) throw error;
+    // The firewall held or stopped the payment on PayPal's page: say so, not "the shop didn't confirm".
+    if (error instanceof StoreError || error instanceof firewall.FirewallStop) throw error;
     const errors = await page.locator('p[role="alert"]').allTextContents();
     await snapshot();
     done("failed", errors.join(" ") || "No confirmation page");

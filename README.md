@@ -196,6 +196,12 @@ MWF itself never calls PayPal. The business's code pays, and MWF checks the paym
 - **Errand** pays with its own **PayPal sandbox buyer account**. When PayPal's page shows the order, Errand sends MWF's commit check PayPal's order id and the amount PayPal holds. It clicks *Complete Purchase* only if MWF agrees that this is exactly the approved purchase.
 - The purchase is recorded in MWF's ledger alongside PayPal's ids.
 
+**Sandbox run** ([evidence/paypal-2026-11-11](evidence/paypal-2026-11-11)), `LAB_PAY=paypal node examples/errand/scripts/attack-lab.mjs legit`:
+- **Firewall off:** Errand paid $14.98 through PayPal (sandbox order `6HR80467HR311540A`).
+- **Firewall on:** MWF confirmed that PayPal held exactly the approved $14.98. It could not confirm who PayPal would pay, because a buyer can't see the payee and FreshCart is registered by address only, so it **held the payment before the click**. The PayPal order stayed unpaid, and the ledger recorded its id with the held decision.
+
+So today a buyer-side agent's PayPal payment fails safe instead of going through. The full fix is a merchant-side check: FreshCart reads the payee from PayPal's API before capture and asks MWF, which already compares the payee with the registered PayPal account. It's next on our list.
+
 Sandbox only, no real money. Setup is in [examples/errand/README.md](examples/errand/README.md) and [examples/freshcart/README.md](examples/freshcart/README.md).
 
 ## Tools and models used
@@ -236,6 +242,7 @@ docs/                architecture, implementation plan, roadmap
 - **Persuasion is the hardest category.** The sensor catches 93 of 300 fresh-wording attacks, not all of them, and ordinary marketing copy can score close to real persuasion. That's why it stays in shadow.
 - **Fixtures and corpora were written by us.** Text from real integrations is the next step.
 - **Real models aren't always fooled.** In our Gemini runs, the model ignored the three injection pages on its own. The firewall's value is not depending on that, and the offline stand-in shows what happens when the model does fall for them.
+- **PayPal payments made by a buyer-side agent are held, not completed**, until the merchant-side payee check is wired in (see [PayPal](#paypal)).
 - **It runs locally.** Production hosting (PostgreSQL, a separate render service, multiple regions) is on the roadmap.
 
 ## Beyond payments

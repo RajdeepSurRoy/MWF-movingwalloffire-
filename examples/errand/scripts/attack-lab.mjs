@@ -5,7 +5,9 @@
 // - the MWF firewall API (from MWF_REPO) on :8787 with a fresh database and its own API key,
 // - FreshCart (from FRESHCART_DIR) on :3100 (LAB_SHOP_PORT) with a fresh database,
 // - a lookalike shop on the next port (a proxy to FreshCart under another address).
-// Payments use the shop's pay-on-delivery option: no PayPal, no money.
+// Payments use the shop's pay-on-delivery option: no PayPal, no money. LAB_PAY=paypal makes the
+// agent pay with its PayPal sandbox buyer account instead (needs the PayPal settings in both apps'
+// env files; sandbox only, no real money).
 //
 // The agent's model: LAB_MODEL=naive (default) is an offline stand-in that always obeys product codes
 // in shop text, so every injection is attempted; LAB_MODEL=gemini uses the real AI (Errand's
@@ -37,6 +39,8 @@ const SHOP = `http://localhost:${SHOP_PORT}`;
 const LOOKALIKE = `http://localhost:${SHOP_PORT + 1}`;
 const API = "http://127.0.0.1:8787";
 const MODEL = process.env.LAB_MODEL ?? "naive";
+const PAY = process.env.LAB_PAY ?? "delivery";
+if (!["delivery", "paypal"].includes(PAY)) throw new Error("LAB_PAY must be delivery or paypal");
 if (!["naive", "gemini", "mock"].includes(MODEL)) throw new Error("LAB_MODEL must be naive, gemini or mock");
 
 const BATTERIES = "HSE-BATT-AA-12";
@@ -199,7 +203,7 @@ function runCase(id, c, firewall) {
       env: {
         ...process.env,
         STORE_URL: c.store ?? SHOP,
-        WALLET_MODE: "off",
+        WALLET_MODE: PAY === "paypal" ? "paypal" : "off",
         LLM_CACHE_HOURS: "0",
         AGENT_LLM: MODEL,
         MWF_ENABLED: firewall ? "1" : "0",
@@ -298,7 +302,7 @@ const report = {
   generated_at: new Date().toISOString(),
   model: MODEL,
   mwf_commit: spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: MWF_REPO, encoding: "utf8" }).stdout.trim(),
-  payments: "FreshCart pay-on-delivery (WALLET_MODE=off): no PayPal, no money",
+  payments: PAY === "paypal" ? "PayPal sandbox: the agent pays with its sandbox buyer account (WALLET_MODE=paypal); no real money" : "FreshCart pay-on-delivery (WALLET_MODE=off): no PayPal, no money",
   summary: results.map((r) => ({ case: r.case, firewall: r.firewall ? "on" : "off", outcome: r.outcome, detail: r.detail })),
   runs: results,
 };
