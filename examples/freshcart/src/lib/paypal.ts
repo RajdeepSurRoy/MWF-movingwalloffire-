@@ -41,9 +41,25 @@ export type PayPalApi = {
     approveUrl: string;
   }>;
   captureOrder(id: string): Promise<CaptureResult>;
+  /** What PayPal holds for an order the shopper approved: its status, amount and payee, from PayPal's API. */
+  getOrder(id: string): Promise<HeldOrder>;
   /** Charges a saved PayPal account straight away, with no PayPal page. */
   chargeSaved(input: { amountCents: number; reference: string; description: string; vaultId: string }): Promise<CaptureResult & { id: string }>;
 };
+
+/** An approved PayPal order before capture, as PayPal's API reports it (not as any page shows it). */
+export type HeldOrder = { id: string; status: string; amountValue?: string; currency?: string; payeeEmail?: string; payeeId?: string };
+
+/**
+ * Asked right before a capture, with what PayPal holds. It throws to stop the capture; what it
+ * returns is called once the capture is done, with PayPal's capture id (for the record).
+ */
+export type CaptureGuard = (input: {
+  sessionId: string;
+  held: HeldOrder;
+  items: { sku: string; quantity: number }[];
+  amountCents: number;
+}) => Promise<((captureId: string) => Promise<void>) | void>;
 
 /** PayPal said no. `issue` is PayPal's reason code, e.g. INSTRUMENT_DECLINED. */
 export class PayPalRequestError extends StoreError {
@@ -106,11 +122,25 @@ async function paypalFetch(path: string, body: unknown, requestId: string) {
   return data;
 }
 
+async function paypalGet(path: string) {
+  const res = await fetch(`${SANDBOX_API}${path}`, { headers: { Authorization: `Bearer ${await accessToken()}` }, cache: "no-store" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    console.error("PayPal error", path, res.status, JSON.stringify(data));
+    throw new PayPalRequestError("PayPal couldn't find this payment. Please try again.", res.status, data.details?.[0]?.issue);
+  }
+  return data;
+}
+
 type PayPalOrderResponse = {
   id: string;
   status: string;
   payment_source?: { paypal?: { email_address?: string; attributes?: { vault?: { id?: string; status?: string; customer?: { id?: string } } } } };
-  purchase_units?: { payments?: { captures?: { id: string; status: string; amount: { value: string; currency_code: string } }[] } }[];
+  purchase_units?: {
+    amount?: { value: string; currency_code: string };
+    payee?: { email_address?: string; merchant_id?: string };
+    payments?: { captures?: { id: string; status: string; amount: { value: string; currency_code: string } }[] };
+  }[];
 };
 
 function readCapture(data: PayPalOrderResponse): CaptureResult {
@@ -164,6 +194,18 @@ export const paypalApi: PayPalApi = {
   },
   async captureOrder(id) {
     return readCapture(await paypalFetch(`/v2/checkout/orders/${encodeURIComponent(id)}/capture`, {}, `capture-${id}`));
+  },
+  async getOrder(id) {
+    const data = (await paypalGet(`/v2/checkout/orders/${encodeURIComponent(id)}`)) as PayPalOrderResponse;
+    const unit = data.purchase_units?.[0];
+    return {
+      id: data.id,
+      status: data.status,
+      amountValue: unit?.amount?.value,
+      currency: unit?.amount?.currency_code,
+      payeeEmail: unit?.payee?.email_address,
+      payeeId: unit?.payee?.merchant_id,
+    };
   },
   async chargeSaved({ amountCents, reference, description, vaultId }) {
     let data: PayPalOrderResponse = await paypalFetch(
@@ -372,6 +414,7 @@ export async function completePayPalPayment(
   paypalOrderId: string,
   db: DB = getDb(),
   api: PayPalApi = paypalApi,
+  guard?: CaptureGuard,
 ): Promise<{ orderId: string; placedVia: string; returnPath: string }> {
   const payment = findPayment(sessionId, paypalOrderId, db);
   if (!payment) throw new StoreError("We couldn't find this PayPal payment.");
@@ -392,6 +435,17 @@ export async function completePayPalPayment(
     return new StoreError(message);
   };
 
+  // Before any money moves: what PayPal holds (amount, payee) goes to the guard, which can stop it.
+  let captured: ((captureId: string) => Promise<void>) | void = undefined;
+  if (guard) {
+    try {
+      const held = await api.getOrder(paypalOrderId);
+      captured = await guard({ sessionId, held, items: payment.items, amountCents: payment.amountCents });
+    } catch (error) {
+      throw fail(error instanceof StoreError ? error.message : "The store couldn't check this payment, so it wasn't taken.");
+    }
+  }
+
   let capture: Awaited<ReturnType<PayPalApi["captureOrder"]>>;
   try {
     capture = await api.captureOrder(paypalOrderId);
@@ -402,6 +456,7 @@ export async function completePayPalPayment(
   if (capture.currency !== "USD" || capture.amountValue !== centsToValue(payment.amountCents)) {
     throw fail("The amount PayPal captured doesn't match the order total.");
   }
+  if (captured) await captured(capture.captureId).catch((error) => console.error("Recording the capture failed", error));
   // The shopper agreed on PayPal to save the account: later orders can be paid from the chat.
   if (capture.vault) rememberPayPal(sessionId, capture.vault, db);
 

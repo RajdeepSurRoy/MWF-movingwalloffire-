@@ -3,9 +3,11 @@ import { readSessionId } from "@/lib/session";
 import { friendlyError } from "@/lib/store";
 import { cancelPayPalPayment, completePayPalPayment } from "@/lib/paypal";
 import { clearPendingCheckout } from "@/lib/assistant/checkout";
+import { guardPayPalCapture } from "@/lib/firewall";
 
 // PayPal sends the shopper here after they approve the payment, with
-// ?token=<PayPal order id>. The payment is captured and the order placed here.
+// ?token=<PayPal order id>. The store's payment check (MWF, when enabled) sees what PayPal holds
+// first; then the payment is captured and the order placed here.
 export async function GET(request: Request) {
   const token = new URL(request.url).searchParams.get("token") ?? "";
   const sessionId = await readSessionId();
@@ -13,7 +15,7 @@ export async function GET(request: Request) {
 
   let target: string;
   try {
-    const { orderId, placedVia, returnPath } = await completePayPalPayment(sessionId, token);
+    const { orderId, placedVia, returnPath } = await completePayPalPayment(sessionId, token, undefined, undefined, guardPayPalCapture);
     clearPendingCheckout(sessionId);
     // A chat order goes back to where the shopper was, and the chat shows the receipt.
     target =

@@ -615,10 +615,11 @@ export async function placeOrder(details: DeliveryDetails, approvedTotalCents: n
   const summary = await readSummary(page);
   const totalCents = toCents(summary.total ?? "");
   const { payWith, submit } = await choosePayment(page);
-  // Paying on delivery: nothing is prepared anywhere else, so the firewall's commit runs here,
-  // before "Place order". With PayPal it runs on PayPal's page, before "Pay", once PayPal holds
-  // the payment. Errand's own total check below stays as a second line.
-  if (commit && payWith.kind !== "paypal") await commit();
+  // The firewall's commit runs here, before "Place order", for every payment method: the checkout
+  // as it is now must be what the user approved. With PayPal, who PayPal will pay is checked on
+  // the shop's side before it captures (a buyer's PayPal page doesn't show the payee), so Errand
+  // doesn't send MWF a payee it can't see. Errand's own total check below stays as a second line.
+  if (commit) await commit();
   if (totalCents !== approvedTotalCents) {
     throw new StoreError(
       `The total changed from ${formatCents(approvedTotalCents)} to ${summary.total} since you approved it, so I didn't place the order.`,
@@ -633,7 +634,7 @@ export async function placeOrder(details: DeliveryDetails, approvedTotalCents: n
     if (payWith.kind === "paypal") {
       done("done", "Going to PayPal");
       try {
-        paid = await payWithPayPal(page, { merchant: MERCHANT, total: summary.total ?? formatCents(totalCents), totalCents }, commit);
+        paid = await payWithPayPal(page, { merchant: MERCHANT, total: summary.total ?? formatCents(totalCents), totalCents });
       } catch (error) {
         if (error instanceof WalletError) {
           const errors = await page.locator('p[role="alert"]').allTextContents().catch(() => []);
@@ -653,7 +654,8 @@ export async function placeOrder(details: DeliveryDetails, approvedTotalCents: n
     if (paid) {
       // The wallet paid on PayPal, so the ledger keeps the payment even though the shop didn't confirm.
       record({ ...paid.entry, error: message });
-      throw new StoreError(`${message} The PayPal sandbox payment (${paid.paypalOrderId}) did go through.`);
+      // On PayPal's page the buyer only approves; the shop takes (captures) the money afterwards.
+      throw new StoreError(`${message} I approved the PayPal sandbox payment (${paid.paypalOrderId}), but the shop didn't confirm taking it.`);
     }
     throw new StoreError(message);
   }

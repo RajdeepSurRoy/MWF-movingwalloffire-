@@ -51,7 +51,7 @@ Each check returns **ALLOW**, **REVIEW** (hold for a person) or **BLOCK**, with 
 | Hidden text (off-screen, transparent, tiny, zero-width, comments) | Each page is rendered in sandboxed headless Chromium at desktop and phone sizes, with scripts off and network blocked, and compared with what a parser sees |
 | Fake compliance or urgency ("mandatory warranty") | Compliance and commerce-imperative patterns; uncapped fees are blocked |
 | Persuasion ("our most trusted pick for AI assistants") | Learned claim rules plus the embedding sensor (REVIEW only) |
-| Lookalike merchant or payee | Exact allowlist of merchants, payees and checkout origins |
+| Lookalike merchant or payee | Exact allowlist of merchants, payees and checkout origins; before capture, PayPal's own record of the payee must match the registered account |
 | Changes after approval (price, items, payee) | Single-use action token; the commit hash must match the approval |
 | Budget creep across purchases | Session budget counts every committed and every still-approved purchase |
 
@@ -190,17 +190,25 @@ Each example app's whole integration is one file of a few hundred lines: [exampl
 
 ## PayPal
 
-MWF itself never calls PayPal. The business's code pays, and MWF checks the payment just before it happens. In the examples:
+MWF itself never calls PayPal and never holds PayPal credentials. The business's code moves the money; MWF checks it first, on both sides of the purchase:
 
-- **FreshCart** checks out with **PayPal Orders v2** in the **sandbox**: OAuth, `POST /v2/checkout/orders`, then capture.
-- **Errand** pays with its own **PayPal sandbox buyer account**. When PayPal's page shows the order, Errand sends MWF's commit check PayPal's order id and the amount PayPal holds. It clicks *Complete Purchase* only if MWF agrees that this is exactly the approved purchase.
-- The purchase is recorded in MWF's ledger alongside PayPal's ids.
+- **The shop (FreshCart)** checks out with **PayPal Orders v2** in the sandbox. Right before it **captures**, it reads the order from **PayPal's API** (status, amount, **payee**) and sends that to MWF's commit check. MWF compares it with the order and with the PayPal account registered for the shop. FreshCart captures **only on ALLOW**, then records PayPal's capture id in MWF's ledger.
+- **The agent (Errand)** pays with its own **PayPal sandbox buyer account**. Before it clicks *Place order*, MWF checks that the checkout is still exactly what the user approved.
 
-**Sandbox run** ([evidence/paypal-2026-11-11](evidence/paypal-2026-11-11)), `LAB_PAY=paypal node examples/errand/scripts/attack-lab.mjs legit`:
-- **Firewall off:** Errand paid $14.98 through PayPal (sandbox order `6HR80467HR311540A`).
-- **Firewall on:** MWF confirmed that PayPal held exactly the approved $14.98. It could not confirm who PayPal would pay, because a buyer can't see the payee and FreshCart is registered by address only, so it **held the payment before the click**. The PayPal order stayed unpaid, and the ledger recorded its id with the held decision.
+The payee check runs on the merchant's side because only the merchant can see who PayPal will pay. A buyer's PayPal page doesn't show it.
 
-So today a buyer-side agent's PayPal payment fails safe instead of going through. The full fix is a merchant-side check: FreshCart reads the payee from PayPal's API before capture and asks MWF, which already compares the payee with the registered PayPal account. It's next on our list.
+**Sandbox run** ([evidence/paypal-2026-11-11](evidence/paypal-2026-11-11)):
+
+| Case | Result with MWF |
+|---|---|
+| Legitimate $14.98 purchase | ✅ **Paid.** `COMMIT.EFFECT_MATCH`: PayPal held the approved amount for the shop's registered account. PayPal order `28B22572T3166930J`, capture `7D823388UT216371S` |
+| PayPal order pays a different account (as if the shop's PayPal keys were swapped) | 🛡️ **Not captured.** `COMMIT.EFFECT_PAYEE_MISMATCH`: the buyer had approved on PayPal, but no money was taken |
+| Price raised after the user approved | 🛡️ **Blocked** before *Place order* (`COMMIT.HASH_MISMATCH`) |
+
+```bash
+LAB_PAY=paypal node examples/errand/scripts/attack-lab.mjs legit price-change
+LAB_PAY=paypal LAB_PAYPAL_PAYEE=payments@not-freshcart.example node examples/errand/scripts/attack-lab.mjs legit
+```
 
 Sandbox only, no real money. Setup is in [examples/errand/README.md](examples/errand/README.md) and [examples/freshcart/README.md](examples/freshcart/README.md).
 
@@ -211,7 +219,7 @@ Sandbox only, no real money. Setup is in [examples/errand/README.md](examples/er
 | **all-MiniLM-L6-v2** (Apache-2.0), via **transformers.js** and **ONNX Runtime** | Firewall | Turns persuasion claims into vectors for the learned sensor. Runs locally, pinned by revision and file hash. Can only hold for REVIEW |
 | **Headless Chromium** (Playwright) | Firewall | Renders pages as a person sees them, to catch hidden text |
 | **Google Gemini** (`gemini-3.5-flash`) | Examples only | The brain of the Errand agent and FreshCart's shop assistant. Never part of the firewall |
-| **PayPal REST APIs (sandbox)** | Examples only | Checkout and payment in FreshCart and Errand |
+| **PayPal REST APIs (sandbox)**: OAuth, Orders v2 (create, get, capture) | Examples | FreshCart takes payments, and reads each order's amount and payee from PayPal for MWF's check before capture; Errand pays with a sandbox buyer account |
 | **Claude Code** (Anthropic) | Development | Coding assistant used while building the project |
 
 Stack: TypeScript on Node 24, Fastify, SQLite (`node:sqlite`), Zod, Vitest, npm workspaces.
@@ -242,7 +250,6 @@ docs/                architecture, implementation plan, roadmap
 - **Persuasion is the hardest category.** The sensor catches 93 of 300 fresh-wording attacks, not all of them, and ordinary marketing copy can score close to real persuasion. That's why it stays in shadow.
 - **Fixtures and corpora were written by us.** Text from real integrations is the next step.
 - **Real models aren't always fooled.** In our Gemini runs, the model ignored the three injection pages on its own. The firewall's value is not depending on that, and the offline stand-in shows what happens when the model does fall for them.
-- **PayPal payments made by a buyer-side agent are held, not completed**, until the merchant-side payee check is wired in (see [PayPal](#paypal)).
 - **It runs locally.** Production hosting (PostgreSQL, a separate render service, multiple regions) is on the roadmap.
 
 ## Beyond payments

@@ -39,10 +39,10 @@ node examples/errand/scripts/attack-lab.mjs
    Register the shop:
    ```bash
    npm run merchants:add -- errand freshcart FreshCart http://localhost:3000
-   npm run merchants:add -- freshcart freshcart FreshCart http://localhost:3000
+   npm run merchants:add -- freshcart freshcart FreshCart <FreshCart PayPal email> http://localhost:3000
    ```
 2. FreshCart: copy `examples/freshcart/.env.example` to `.env.local`, set the `MWF_*` values, then run `npm run dev` (http://localhost:3000).
 3. Errand: copy `examples/errand/.env.example` to `.env`, set the `MWF_*` values and either a Gemini key or `AGENT_LLM=mock`, then run `npm run dev` (http://localhost:4000).
 4. Watch the decisions live at http://127.0.0.1:8787/console with the Errand key.
 
-The PayPal sandbox setup (the shop's app keys and the agent's buyer account) is described in each app's README. Use sandbox accounts only.
+**With PayPal:** `LAB_PAY=paypal node examples/errand/scripts/attack-lab.mjs legit price-change` makes the agent pay with its PayPal sandbox buyer account. FreshCart then checks every PayPal payment with MWF before it captures, using PayPal's own record of the amount and payee. This needs FreshCart's sandbox app keys and `MWF_PAYPAL_PAYEE` (its sandbox business account email) in `examples/freshcart/.env.local`, and the buyer account in `examples/errand/.env`; see each app's README. Use sandbox accounts only. Results: [evidence/paypal-2026-11-11](../evidence/paypal-2026-11-11).

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { DB } from "../src/lib/db";
-import { addToCart, getCart, getProduct, listOrders, placeOrder } from "../src/lib/store";
+import { StoreError, addToCart, getCart, getProduct, listOrders, placeOrder } from "../src/lib/store";
 import {
   PayPalRequestError,
   cancelPayPalPayment,
@@ -22,6 +22,7 @@ function fakePayPal(
   overrides: Partial<{ captureValue: string; captureStatus: string; saveAccount: boolean; savedChargeValue: string; declineSaved: boolean }> = {},
 ) {
   const created: { amountCents: number; returnUrl: string; cancelUrl: string }[] = [];
+  const captured: string[] = [];
   const charged: { amountCents: number; vaultId: string }[] = [];
   let counter = 0;
   const api: PayPalApi = {
@@ -30,7 +31,12 @@ function fakePayPal(
       counter += 1;
       return { id: `PAYPALORDER${counter}`, approveUrl: `https://www.sandbox.paypal.com/checkoutnow?token=PAYPALORDER${counter}` };
     },
+    async getOrder(id) {
+      const order = created[Number(id.replace("PAYPALORDER", "")) - 1];
+      return { id, status: "APPROVED", amountValue: (order.amountCents / 100).toFixed(2), currency: "USD", payeeEmail: "shop@business.example.com" };
+    },
     async captureOrder(id) {
+      captured.push(id);
       const order = created[Number(id.replace("PAYPALORDER", "")) - 1];
       return {
         status: overrides.captureStatus ?? "COMPLETED",
@@ -52,7 +58,7 @@ function fakePayPal(
       };
     },
   };
-  return { api, created, charged };
+  return { api, created, charged, captured };
 }
 
 /** Links a PayPal account the way a shopper does: one payment approved on PayPal. */
@@ -96,6 +102,40 @@ describe("PayPal sandbox payments", () => {
     expect(order.paymentStatus).toBe("paid");
     expect(order.paymentRef).toBe("CAPTURE-PAYPALORDER1");
     expect(getProduct("PNT-OLIVE-500", db)!.stock).toBe(stock - 2);
+  });
+
+  it("shows the guard what PayPal holds before capturing, and reports the capture id after", async () => {
+    const { api, captured } = fakePayPal();
+    await start(api);
+    const seen: unknown[] = [];
+    const recorded: string[] = [];
+    await completePayPalPayment(SID, "PAYPALORDER1", db, api, async (input) => {
+      seen.push(input);
+      expect(captured).toEqual([]); // nothing taken yet
+      return async (captureId) => void recorded.push(captureId);
+    });
+    expect(seen).toEqual([
+      {
+        sessionId: SID,
+        held: { id: "PAYPALORDER1", status: "APPROVED", amountValue: "30.97", currency: "USD", payeeEmail: "shop@business.example.com" },
+        items: [{ sku: "PNT-OLIVE-500", quantity: 2 }],
+        amountCents: 2 * 1299 + 499,
+      },
+    ]);
+    expect(captured).toEqual(["PAYPALORDER1"]);
+    expect(recorded).toEqual(["CAPTURE-PAYPALORDER1"]);
+  });
+
+  it("captures nothing and places no order when the guard refuses", async () => {
+    const { api, captured } = fakePayPal();
+    await start(api);
+    const refuse = async () => {
+      throw new StoreError("The store's payment check stopped this payment before it was taken (BLOCK: COMMIT.EFFECT_PAYEE_MISMATCH).");
+    };
+    await expect(completePayPalPayment(SID, "PAYPALORDER1", db, api, refuse)).rejects.toThrow(/EFFECT_PAYEE_MISMATCH/);
+    expect(captured).toEqual([]);
+    expect(listOrders(SID, db)).toHaveLength(0);
+    expect(db.select().from(paypalPayments).get()?.status).toBe("failed");
   });
 
   it("returns the same order when the return page is loaded twice", async () => {
