@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Errand · Shopping agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%232563eb'/><path d='M9 17l5 5 9-11' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 32 32"><rect width="32" height="32" rx="8" /><path d="M9 17l5 5 9-11" /></svg>
+      </span>
+      <div>
+        <h1>Errand</h1>
+        <p>Your personal shopping agent</p>
+      </div>
+    </div>
+    <div class="top-meta">
+      <span class="pill" id="store-pill" title="The website the agent shops on"><span class="dot"></span>Shopping at <b id="store-name">FreshCart</b></span>
+      <span class="pill subtle" id="model-pill">Gemini</span>
+      <span class="pill usage" id="usage-pill" title="AI requests sent today (free-tier quota)">AI today: –</span>
+      <span class="pill wallet" id="wallet-pill" title="The agent's PayPal sandbox wallet">Wallet: –</span>
+      <span class="pill cart-pill" id="cart-pill" title="The agent's cart on FreshCart">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2.4 11.2a1 1 0 0 0 1 .8h8.9a1 1 0 0 0 1-.8L20 8H6.2" /><circle cx="9.5" cy="19.5" r="1.3" /><circle cx="17" cy="19.5" r="1.3" /></svg>
+        <span id="cart-count">0</span> · <span id="cart-total">$0.00</span>
+      </span>
+      <button class="btn ghost" id="profile-btn" type="button">Profile</button>
+      <button class="btn ghost" id="reset-btn" type="button">New session</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="chat" aria-label="Chat with your agent">
+      <div class="messages" id="messages" aria-live="polite">
+        <div class="welcome" id="welcome">
+          <h2>Busy? I'll do the grocery run.</h2>
+          <p>Tell me what you need. I'll browse FreshCart in my own browser, pick products, fill the cart and check out. Nothing is paid until you approve it.</p>
+          <div class="chips" id="chips">
+            <button type="button" class="chip">Dinner for 2 tonight. Vegetarian, something spicy.</button>
+            <button type="button" class="chip">Snacks and drinks for a gaming night, under $25</button>
+            <button type="button" class="chip">Restock coffee, milk and bananas, then check out</button>
+            <button type="button" class="chip">Plan a quick pasta night for 4 and order it</button>
+          </div>
+        </div>
+      </div>
+      <div class="status" id="status" data-state="idle">
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="status-label">Ready</span>
+      </div>
+      <form class="composer" id="composer">
+        <label class="sr-only" for="input">Message your agent</label>
+        <textarea id="input" rows="1" placeholder="e.g. Get me breakfast for the week" maxlength="1000"></textarea>
+        <button class="btn primary" id="send" type="submit" aria-label="Send">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l16-8-6 16-2.5-6.5L4 12z" /></svg>
+        </button>
+      </form>
+    </section>
+
+    <section class="workspace" aria-label="What the agent is doing">
+      <div class="panel browser">
+        <div class="panel-head">
+          <h2>Agent's browser</h2>
+          <span class="live" id="live-badge"><span class="dot"></span>Live</span>
+        </div>
+        <div class="chrome">
+          <div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+          <div class="urlbar">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>
+            <span id="url">about:blank</span>
+          </div>
+        </div>
+        <div class="screen" id="screen">
+          <img id="frame" alt="Live view of the agent's browser" hidden />
+          <div class="screen-empty" id="screen-empty">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2" /><path d="M8 21h8M12 18v3" /></svg>
+            <p>The agent's browser opens when it starts shopping.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel activity">
+        <div class="panel-head">
+          <h2>Activity</h2>
+          <span class="muted small" id="step-count">0 steps</span>
+        </div>
+        <ol class="steps" id="steps"></ol>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="profile-dialog">
+    <form id="profile-form" method="dialog">
+      <h2>Your profile</h2>
+      <p class="muted small">The agent uses this to check out for you. It is saved on this computer only.</p>
+      <label>Full name<input name="name" required minlength="2" maxlength="80" /></label>
+      <label>Email<input name="email" type="email" required /></label>
+      <label>Delivery address<textarea name="address" rows="2" required minlength="8" maxlength="200"></textarea></label>
+      <div class="row">
+        <label>Usual delivery time<select name="deliverySlot" id="slot-select"></select></label>
+        <label>Budget per order ($)<input name="budgetPerOrder" type="number" min="1" max="10000" step="1" required /></label>
+      </div>
+      <label>Preferences<textarea name="preferences" rows="2" maxlength="400" placeholder="Diet, favourite brands, allergies…"></textarea></label>
+      <p class="form-error" id="profile-error" role="alert"></p>
+      <div class="actions">
+        <button class="btn ghost" type="button" id="profile-cancel">Cancel</button>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

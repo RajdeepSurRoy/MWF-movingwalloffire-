@@ -173,6 +173,8 @@ capture void      hold → human → re-check → capture / void
 
 Requires Node 24+.
 
+To see MWF protect a real agent in a demo store, see [examples/](examples): a sample shop (FreshCart) and a third-party shopping agent (Errand) that call MWF over HTTP, plus an attack lab that runs every attack with the firewall off and on.
+
 1. `npm install`, then `npm run install-browser -w @mwf/render` (downloads headless Chromium, ~100 MB, used to check what a person actually sees on a page).
 2. Copy `.env.example` to `.env` and fill in your own PayPal **Sandbox** credentials ([PayPal Developer](https://developer.paypal.com)).
 3. `npm run typecheck` and `npm test`
