@@ -4,7 +4,7 @@ import { FirewallClient, FirewallError } from "./client.js";
 import { Guard, IntentRefused, MAX_READS, type TwoPhase } from "./guard.js";
 
 // Guard against a stubbed API: what happens when the firewall says no, says nothing, or says
-// something malformed. The real API and browser are in apps/agent/src/agent.test.ts.
+// something malformed. The real API is exercised in apps/firewall-api and tests/.
 
 const KEY = "mwf_test_key_never_shown";
 const TOKEN = "mwf_at_secret_token";

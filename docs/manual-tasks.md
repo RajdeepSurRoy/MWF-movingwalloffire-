@@ -7,8 +7,8 @@ Code can't do these: they need an account, a browser login, a decision, or a per
 - [ ] **J + R — Create your own PayPal sandbox app.** [developer.paypal.com](https://developer.paypal.com) → Apps & Credentials → Sandbox → Create App. Copy the client ID and secret into **your own** `.env` (never chat, never git).
 - [ ] **J + R — Enable Vault** on that sandbox app (app settings → advanced / features → Vault).
 - [ ] **J + R — Note a sandbox personal (buyer) account** under Sandbox → Accounts. You'll log in with it once.
-- [ ] **J — Run the Vault spike** (deadline **end of Nov 4**). Steps in [spikes/paypal-vault/README.md](../spikes/paypal-vault/README.md): `setup` → approve the link in the browser with the sandbox buyer → `token` → `run`. Paste the final "Spike passed" line (not the IDs) in the team chat. If it fails, we fall back to the sandbox test card.
-- [ ] **J — M6 sandbox evidence run** (after the Vault spike): add `PAYPAL_PAYEE_EMAIL` (your sandbox app's business account email) to `.env`, then run `npm run pay-demo -w @mwf/agent`. Pass: "M6 evidence: one ALLOW captured, one BLOCK voided". It prints sandbox ids only.
+- [ ] **J — Run the Vault spike** (deadline **end of Nov 4**). The spike folder was removed on 2026-11-10; the sandbox run now goes through Errand (outside this repo). If Vault fails, we fall back to the sandbox test card.
+- [ ] **J — M6 sandbox evidence run** (after the Vault spike): add `PAYPAL_PAYEE_EMAIL` (your sandbox app's business account email) to `.env`, then run the PayPal flow through Errand (outside this repo). Pass: one ALLOW captured, one BLOCK voided, sandbox ids only in the ledger.
 - [x] **R — Check GitHub Actions is enabled.** Done: CI runs on every push (M0 run passed 2026-11-02).
 - [ ] **R — Confirm the stack** recorded in [architecture.md §15](architecture.md#15-decisions-and-open-questions) (TypeScript + Fastify + Next.js + SQLite + Python sensors).
 

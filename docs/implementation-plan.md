@@ -42,13 +42,13 @@
    packages/core        types, policy engine, graph, ledger, hashing
    packages/sdk         client wrapper that agents use
    apps/firewall-api    Fastify server: the five checkpoints + feedback
-   apps/shop            simulated e-commerce site with planted attacks
-   apps/agent           minimal shopping agent with one propose_purchase tool
-   apps/console         review queue, attack paths, rules, Passport
-   services/sensors     Python: embeddings + injection classifier
+   packages/sensors     embedding sensor (transformers.js, in Node)
+   apps/firewall-api    also serves the console at /console
    redteam/             mutation engine, scenarios, runner
    tests/fixtures       attacks/, legit/, expected outcomes
    ```
+
+   Since 2026-11-10 the repo holds only the system. The demo shop, agent and PayPal spike were removed; the end-to-end demos run against two separate apps (FreshCart, a shop, and Errand, a shopping agent) that call MWF over HTTP with their own API key and live outside this repo.
 
 4. **CI:** lint, type-check and the test battery on every push (GitHub Actions).
 5. **PayPal Vault spike (highest risk).** Get a sandbox buyer, save a payment method for the agent, then create order (intent AUTHORIZE) → authorize → capture, and a second order → authorize → void, with no human in the loop.
@@ -112,7 +112,7 @@
 - **The 11 of 16 hidden-text attacks from M4** are closed differently from what M4 expected. Hard-flagged pages are quarantined at inspection, so the agent never reads them; a page withheld is not "read", so it stays out of `derived_from`. A later purchase that names nothing from the page gets REVIEW (`CTX.QUARANTINED_IN_SESSION`), not BLOCK: the agent provably did not see the text, and a person decides.
 - **Agent-step nodes were not added.** `derived_from` edges from the SDK's record give the same path; a step node would add nothing until there is more than one proposal per session.
 
-Agent (`apps/agent`): a tool loop that validates every model call, a `Model` interface, `RecordingModel` / `ReplayModel` (a replay fails if what the model sees differs from the recording), and baseline mode (`runBaseline`). `npm run demo -w @mwf/agent` shows each scenario with the firewall off and on.
+Agent (`apps/agent`, removed 2026-11-10): a tool loop that validates every model call, a `Model` interface, `RecordingModel` / `ReplayModel` (a replay fails if what the model sees differs from the recording), and baseline mode (`runBaseline`). `npm run demo -w @mwf/agent` shows each scenario with the firewall off and on.
 
 **Not the real thing yet:**
 - **Model.** Which model drives the agent is undecided, so `NaiveShopper` stands in: deterministic, reads raw HTML, obeys any page that tells it to buy. "Fooled in baseline" therefore proves the firewall's side only, not that a real model falls for these attacks. A real model needs one class implementing `Model`, plus a key.
@@ -188,10 +188,10 @@ MWF is a check-and-record layer: it never executes an action, never calls the ou
    - A family with no checker yet is recorded only (`COMMIT.EFFECT_RECORDED`).
 3. **Outcome reporting.** `POST /v1/actions/outcome` records how it ended (`executed`, `cancelled`, `held`), with the system's own ids, and whether the integration followed the decision. This is the audit trail the console will show.
 4. **SDK.** The Guard takes the business's own `TwoPhase` hooks (`prepare`, `execute`, `cancel`) and only decides which one to call. It prepares only after ALLOW at the check and executes only on `next: execute`. Any failure, or no answer from the firewall, cancels.
-5. **Demo business's PayPal code** (`apps/agent/src/paypal/`, not MWF): authorize with a vaulted sandbox wallet (no buyer present), capture, void. Each step has its own `PayPal-Request-Id`. It is plugged in with `paypalTwoPhase()`.
+5. **Demo business's PayPal code** (was `apps/agent/src/paypal/`, removed 2026-11-10; the sandbox run now goes through Errand, outside the repo; not MWF): authorize with a vaulted sandbox wallet (no buyer present), capture, void. Each step has its own `PayPal-Request-Id`. It is plugged in with `paypalTwoPhase()`.
    - *Done when:* one ALLOW (captured) and one BLOCK (voided) run end to end with sandbox IDs written to the ledger.
 6. **Status 2026-11-09: built and run offline; the sandbox run is waiting on credentials.**
-   - `npm run pay-demo -w @mwf/agent -- --fake` passes offline. Shop A is captured. Shop B's checkout looks right, but PayPal would pay another account, so it is voided. Both are in the ledger with PayPal's ids. Without `--fake` the same run goes to the sandbox.
+   - (Before the 2026-11-10 cleanup) `npm run pay-demo -w @mwf/agent -- --fake` passed offline. Shop A is captured. Shop B's checkout looks right, but PayPal would pay another account, so it is voided. Both are in the ledger with PayPal's ids. Without `--fake` the same run goes to the sandbox.
    - Closes the "self-asserted payee" limit for integrations that use the two-phase commit. The payee comes from the provider's record, copied by the integration's code, not from the model or a page.
    - **Not done:**
      - the sandbox run (needs `PAYPAL_CLIENT_ID`/`SECRET`, `PAYPAL_PAYEE_EMAIL` and the Vault spike's buyer approval)
@@ -202,7 +202,7 @@ MWF is a check-and-record layer: it never executes an action, never calls the ou
 
 ## M7 — Neural sensors (Nov 7–9)
 
-1. **Sidecar service** (`services/sensors`): `POST /embed`, `POST /similarity`, `POST /injection-score`. Each response includes the model hash. Timeouts → caller treats as REVIEW.
+1. **Sidecar service** (`services/sensors`; replaced by `packages/sensors` in Node, see architecture §15): `POST /embed`, `POST /similarity`, `POST /injection-score`. Each response includes the model hash. Timeouts → caller treats as REVIEW.
 2. **Embedding model** (`bge-small-en-v1.5` or `all-MiniLM-L6-v2`) for **intent ↔ cart similarity**.
 3. **Calibrate the threshold on the legitimate set** (target: at most 1 in 200 legitimate purchases to REVIEW), *then* measure how many attacks it catches.
 4. **Injection classifier** (off-the-shelf DeBERTa or Prompt Guard; check the license) on untrusted spans at checkpoint 2, REVIEW only. Same calibration.

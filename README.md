@@ -121,7 +121,7 @@ capture void      hold → human → re-check → capture / void
 - Capture: `POST /v2/payments/authorizations/{authorization_id}/capture`
 - Void: `POST /v2/payments/authorizations/{authorization_id}/void`
 - Saved payment method via **PayPal Vault** (biggest technical risk — to be spiked first). Fallback: sandbox test card.
-- The capture and void calls are the **business's own code** (in the demo, `apps/agent/src/paypal/`). MWF checks what PayPal actually holds (amount, payee) before the capture, records what happened with PayPal's ids, and never calls PayPal or holds its credentials.
+- The capture and void calls are the **business's own code** (in the demo, Errand's own code, outside this repo). MWF checks what PayPal actually holds (amount, payee) before the capture, records what happened with PayPal's ids, and never calls PayPal or holds its credentials.
 - **`PayPal-Request-Id`** provides idempotency against duplicate/retry attacks — that protection is PayPal's, and we credit it as such.
 - Everything runs in the **PayPal Sandbox**. No real money.
 
@@ -167,7 +167,7 @@ capture void      hold → human → re-check → capture / void
 
 **Not decided yet:** which model drives the shopping agent and the red-team attack generator. Both sit outside the firewall — the agent is the attack victim, and the attacker side may be creative — so either could use an LLM.
 
-**Everything else:** TypeScript end to end on Node 24 (npm workspaces, Fastify for the firewall API, Next.js for the shop and console, SQLite, Vitest), plus a Python sidecar for the neural sensors. Details in [docs/architecture.md §15](docs/architecture.md#15-decisions-and-open-questions).
+**Everything else:** TypeScript end to end on Node 24 (npm workspaces, Fastify for the firewall API, SQLite, Vitest; the console is plain HTML served by the API), with the embedding sensor in Node (transformers.js + ONNX Runtime). Details in [docs/architecture.md §15](docs/architecture.md#15-decisions-and-open-questions).
 
 ## Getting started
 
@@ -197,7 +197,7 @@ const item = await pageContextItem(page, recorder, { id: "page-1" });
 recorder.stop();
 ```
 
-Repo layout: `packages/` (core, sdk), `apps/` (firewall-api, shop, agent, console), `services/sensors`, `redteam/`, `tests/fixtures/`, `spikes/`. The build order is in [docs/implementation-plan.md](docs/implementation-plan.md).
+Repo layout: `packages/` (core, sdk, sensors, render), `apps/firewall-api` (the API and the console at `/console`), `redteam/`, `tests/` (+ `fixtures/`), `evidence/`, `docs/`. The repo holds only the system: the demo shop (FreshCart) and agent (Errand) are separate apps that call MWF over HTTP with their own API key. The build order is in [docs/implementation-plan.md](docs/implementation-plan.md).
 
 Conventions:
 
