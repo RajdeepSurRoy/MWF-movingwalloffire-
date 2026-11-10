@@ -1,8 +1,8 @@
 # End-to-end run: Errand + FreshCart against MWF (2026-11-10)
 
-Two separate apps, outside this repo, call MWF over HTTP with their own API key:
+Two separate apps, now in [examples/](../../examples), call MWF over HTTP with their own API key:
 **FreshCart** (a Next.js shop, run on :3100) and **Errand** (a third-party shopping agent).
-Errand's attack lab (`node scripts/attack-lab.mjs` in Errand) starts throwaway copies of MWF
+Errand's attack lab (`node examples/errand/scripts/attack-lab.mjs`) starts throwaway copies of MWF
 (commit `2f9b551`), FreshCart and a lookalike shop, plants each attack in the shop, and runs
 Errand once with the firewall off and once with it on. Payments use FreshCart's pay-on-delivery
 option: no PayPal, no money.
