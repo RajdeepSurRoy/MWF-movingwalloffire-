@@ -42,3 +42,6 @@ data/
 
 # Downloaded model files (sensors)
 .cache/
+
+# Wrangler local state (Cloudflare deploy)
+.wrangler/

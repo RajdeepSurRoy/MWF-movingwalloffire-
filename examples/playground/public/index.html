@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MWF Playground</title>
+  <meta name="description" content="Watch an AI shopping agent get attacked, with the MWF firewall on or off.">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <div class="name">Moving Wall of Fire</div>
+        <div class="sub">Playground</div>
+      </div>
+    </div>
+    <nav class="links">
+      <a href="/console" target="_blank" rel="noopener">Firewall console ↗</a>
+      <a id="repo" href="https://github.com/RajdeepSurRoy/MWF-movingwalloffire-" target="_blank" rel="noopener">GitHub ↗</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="intro">
+      <h1>Trick an AI shopping agent. Then turn the firewall on.</h1>
+      <p>
+        <strong>Errand</strong> is an AI agent that shops for a user on <strong>FreshCart</strong>, a grocery store.
+        Pick an attack to plant in the shop, choose whether <strong>MWF</strong> checks the agent, and run it.
+        You watch the agent's real browser. The result comes from the shop's own order database, not from what the agent says.
+      </p>
+      <p class="muted small">
+        The agent here uses a deliberately gullible stand-in model that always obeys instructions it finds in shop text,
+        so every attack is really attempted. Payment is pay-on-delivery in a demo shop: no real money and no AI key.
+        Runs are shared: everyone on this page watches the same queue.
+      </p>
+    </section>
+
+    <section class="setup" aria-labelledby="setup-h">
+      <h2 id="setup-h">1. Pick an attack</h2>
+      <div id="cases" class="cases" role="radiogroup" aria-label="Scenario"></div>
+
+      <h2>2. Firewall</h2>
+      <div class="switch" role="radiogroup" aria-label="Firewall">
+        <label><input type="radio" name="fw" value="off"> <span>Off <em>(agent alone)</em></span></label>
+        <label><input type="radio" name="fw" value="on" checked> <span>On <em>(checked by MWF)</em></span></label>
+      </div>
+
+      <div class="go">
+        <button id="run" type="button" disabled>Run</button>
+        <span id="status" class="muted" role="status" aria-live="polite">Connecting…</span>
+      </div>
+    </section>
+
+    <section class="live" aria-labelledby="live-h">
+      <div class="live-head">
+        <h2 id="live-h">Live</h2>
+        <span id="now" class="muted"></span>
+      </div>
+      <div class="live-grid">
+        <figure class="screen">
+          <div class="bar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="frame-url" class="mono"></span></div>
+          <img id="frame" alt="The agent's browser" hidden>
+          <div id="frame-empty" class="empty">The agent's browser shows here during a run.</div>
+        </figure>
+        <div class="feed">
+          <ol id="log" class="log" aria-label="What the agent and the firewall did"></ol>
+        </div>
+      </div>
+      <div id="outcome" class="outcome" hidden></div>
+    </section>
+
+    <section aria-labelledby="recent-h">
+      <h2 id="recent-h">Recent runs</h2>
+      <p class="muted small">Since this demo last started. Open the <a href="/console" target="_blank" rel="noopener">console</a> to see every firewall decision behind them, with its reasons.</p>
+      <div class="table-wrap">
+        <table class="recent">
+          <thead><tr><th>Scenario</th><th>Firewall</th><th>Outcome</th><th>What happened</th></tr></thead>
+          <tbody id="recent"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot muted small">
+    MWF checks an agent at five points (intent, context, action, commit, output) and answers ALLOW, REVIEW or BLOCK.
+    A deterministic policy decides; models can only tighten it. MWF never executes payments.
+  </footer>
+</body>
+</html>

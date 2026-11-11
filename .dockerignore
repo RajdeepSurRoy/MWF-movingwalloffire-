@@ -1,0 +1,29 @@
+# Secrets: never in the image
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Built or installed inside the image instead
+**/node_modules
+**/.next
+**/tsconfig.tsbuildinfo
+.cache
+
+# Local data, databases and tooling
+data
+**/data/*.db*
+examples/errand/data
+*.db
+*.db-wal
+*.db-shm
+*.log
+.remember
+.claude
+.git
+.vscode
+.idea
+deploy/cloudflare/node_modules
+deploy/cloudflare/.wrangler

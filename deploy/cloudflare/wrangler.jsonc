@@ -1,0 +1,26 @@
+// The public MWF demo on Cloudflare: this Worker sends every request to one container that runs
+// the image built from the repo's Dockerfile (firewall, shop, agent and the Playground page).
+// Deploy: `npx wrangler deploy` here (needs Docker locally), or Workers Builds with this folder
+// as the root directory (Cloudflare builds the image; no Docker needed). See README.md.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mwf-demo",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+  "observability": { "enabled": true },
+  "containers": [
+    {
+      "class_name": "Demo",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": { "dockerfile": "../../Dockerfile", "build_context": "../.." }
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "DEMO", "class_name": "Demo" }]
+  },
+  "exports": {
+    "Demo": { "type": "durable-object", "storage": "sqlite" }
+  }
+}

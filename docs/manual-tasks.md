@@ -29,5 +29,5 @@ Code can't do these: they need an account, a browser login, a decision, or a per
 
 ## Later
 
-- [ ] **R — Deploy** around **Nov 9** (M6): firewall API on Railway / Render / Fly (needs a persistent disk for SQLite, and Chromium in the image: `npx playwright install --with-deps --only-shell chromium` in the build step, ~0.5 GB RAM headroom per concurrent render). Run the API as a **non-root** user on a host that allows Chromium's OS sandbox (user namespaces); check the startup log has no `MWF_RENDER_SANDBOX=off` warning, shop + console on Vercel. Set env vars in each host's dashboard.
+- [ ] **J + R — Deploy the public demo** (decided 2026-11-11: Cloudflare Workers + Containers). One of us creates the Cloudflare account on the **Workers Paid** plan and invites the other under Members; then import the GitHub repo as a Worker with root directory `deploy/cloudflare`. Cloudflare builds the image, so no Docker is needed. Steps: [deploy/cloudflare/README.md](../deploy/cloudflare/README.md). Then put the URL in the README and on the submission form.
 - [ ] **J — Record the demo video** and write the submission (M11, by Nov 15).

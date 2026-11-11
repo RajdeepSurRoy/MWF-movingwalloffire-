@@ -4,6 +4,7 @@
 
 Built for the PayPal AI Hackathon 2026. Our first target is the riskiest thing an agent does: **spending money**.
 
+- **Try it live:** *(Playground link added on deploy)*. Pick an attack, turn the firewall on or off, and watch the agent shop. Nothing to install.
 - **Demo video:** *(link added on submission)*
 - **Run it yourself:** [Quick start](#quick-start-for-judges). Everything runs locally; no keys or money are needed.
 - **Results:** [What we measured](#what-we-measured).
@@ -123,6 +124,8 @@ npm install --prefix examples/freshcart
 npm install --prefix examples/errand
 node examples/errand/scripts/attack-lab.mjs
 ```
+
+The same, one run at a time in your browser: `node examples/playground/server.mjs`, then open http://127.0.0.1:8080. This is the [Playground](examples/playground) that is deployed publicly ([deploy/cloudflare](deploy/cloudflare)).
 
 **4. Watch the firewall learn:**
 

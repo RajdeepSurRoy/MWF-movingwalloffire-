@@ -1,0 +1,12 @@
+{
+  "name": "mwf-demo-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "check": "wrangler deploy --dry-run --containers-rollout=none"
+  },
+  "devDependencies": {
+    "wrangler": "4.156.2"
+  }
+}

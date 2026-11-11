@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "console:demo", "--", "--delay", "2500"],
       "port": 8787
+    },
+    {
+      "name": "playground",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["examples/playground/server.mjs"],
+      "port": 8080
     }
   ]
 }

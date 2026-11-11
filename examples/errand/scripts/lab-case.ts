@@ -14,6 +14,8 @@ events.subscribe({
   writeHead() {},
   write(d: string) {
     if (!d.startsWith("data:")) return;
+    // LAB_STREAM=1: every event also goes out as one "EVENT {...}" line, for a live view (the playground).
+    if (process.env.LAB_STREAM === "1") console.log("EVENT " + d.slice(6).trim());
     const e = JSON.parse(d.slice(6)) as Event;
     if (e.type === "message" && e.message) {
       if (e.message.role === "agent" && e.message.text) said.push(e.message.text);
