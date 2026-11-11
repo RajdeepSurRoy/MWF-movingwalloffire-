@@ -32,6 +32,8 @@ export class Demo extends DurableObject {
     url.host = "container";
     const forwarded = new Request(url, request);
     forwarded.headers.delete("host");
+    // Pass on only the address Cloudflare saw, never a client-sent copy.
+    forwarded.headers.set("cf-connecting-ip", request.headers.get("cf-connecting-ip") ?? "unknown");
     return this.ctx.container.getTcpPort(PORT).fetch(forwarded);
   }
 
@@ -39,7 +41,10 @@ export class Demo extends DurableObject {
     const container = this.ctx.container;
     if (!container.running) {
       // No Internet access: everything the demo needs is inside the image.
-      container.start({ image: container.images.base, instance: "standard-1", enableInternet: false });
+      // TRUST_CF_IP: only this Worker reaches the container, and Cloudflare sets CF-Connecting-IP
+      // itself (a client can't supply it), so the Playground may rate-limit by it. It is not set
+      // in the image, where a direct client could spoof the header.
+      container.start({ image: container.images.base, instance: "standard-1", enableInternet: false, env: { TRUST_CF_IP: "1" } });
     }
     await container.setInactivityTimeout(INACTIVITY_TIMEOUT_MS);
     const port = container.getTcpPort(PORT);

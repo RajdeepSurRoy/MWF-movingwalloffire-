@@ -27,7 +27,7 @@ Open http://127.0.0.1:8080. The page reads "Starting…" until the firewall and 
 | `PORT`, `HOST` | `8080`, `127.0.0.1` | The container uses `0.0.0.0` |
 | `SHOP_MODE` | `dev` | `start` serves a production build (run `npx next build` in `examples/freshcart` first) |
 | `DATA_DIR` | a new temp folder | Where the firewall and shop databases go |
-| `TRUST_CF_IP` | off | `1` behind Cloudflare: rate-limit by `CF-Connecting-IP` |
+| `TRUST_CF_IP` | off | `1` only behind Cloudflare (the Worker sets it): rate-limit by `CF-Connecting-IP`. Never set it where clients reach the server directly; they could fake the header |
 
 It uses ports 8787 (firewall), 3100 (shop) and 3101 (lookalike shop) internally, the same as the attack lab, so don't run both at once.
 

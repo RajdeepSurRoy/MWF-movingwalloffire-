@@ -48,7 +48,6 @@ ENV NODE_ENV=production \
     PORT=8080 \
     SHOP_MODE=start \
     DATA_DIR=/tmp/mwf-playground \
-    TRUST_CF_IP=1 \
     MWF_RENDER_SANDBOX=off \
     MWF_SENSORS_DOWNLOAD=0 \
     BROWSER_CHANNEL=chromium
