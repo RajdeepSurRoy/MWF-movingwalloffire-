@@ -7,7 +7,7 @@ These two apps are **sample customers** of MWF, not part of it. They exist so yo
 | [freshcart/](freshcart) | **FreshCart**, a demo grocery store (Next.js, SQLite, PayPal sandbox checkout, its own AI assistant) | The store's assistant checks its steps with MWF |
 | [errand/](errand) | **Errand**, a third-party shopping agent (Express, Playwright driving Chrome, Gemini or an offline stand-in) | Every page Errand reads and every checkout it attempts goes through MWF first |
 
-[playground/](playground) is a public web page over both: pick an attack, turn the firewall on or off, and watch a run live. It is what the public demo serves ([deploy/cloudflare](../deploy/cloudflare)).
+[playground/](playground) is a public web page over both: pick an attack, turn the firewall on or off, and watch a run live. It runs locally today and is packaged for hosting later ([deploy/cloudflare](../deploy/cloudflare)).
 
 Both are switched on by three settings in their own `.env`: `MWF_ENABLED=1`, `MWF_API_URL` and `MWF_API_KEY`. Each app's `firewall.ts` is the whole integration.
 

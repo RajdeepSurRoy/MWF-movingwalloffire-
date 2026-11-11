@@ -29,5 +29,5 @@ Code can't do these: they need an account, a browser login, a decision, or a per
 
 ## Later
 
-- [ ] **J + R — Deploy the public demo** (decided 2026-11-11: Cloudflare Workers + Containers). One of us creates the Cloudflare account on the **Workers Paid** plan and invites the other under Members; then import the GitHub repo as a Worker with root directory `deploy/cloudflare`. Cloudflare builds the image, so no Docker is needed. Steps: [deploy/cloudflare/README.md](../deploy/cloudflare/README.md). Then put the URL in the README and on the submission form.
-- [ ] **J — Record the demo video** and write the submission (M11, by Nov 15).
+- [ ] **J + R — Deploy the public demo** (after the hackathon, before real customers; decided 2026-11-11. For the video we run it locally). Plan: Cloudflare Workers + Containers, or a free host such as Hugging Face Spaces (Docker). One of us creates the Cloudflare account on the **Workers Paid** plan and invites the other under Members; then import the GitHub repo as a Worker with root directory `deploy/cloudflare`. Cloudflare builds the image, so no Docker is needed. Steps: [deploy/cloudflare/README.md](../deploy/cloudflare/README.md). Then put the URL in the README.
+- [ ] **J — Record the demo video** from a local run (`node examples/playground/server.mjs`) and write the submission (M11, by Nov 15).
