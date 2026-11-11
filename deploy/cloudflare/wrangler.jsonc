@@ -4,7 +4,7 @@
 // as the root directory (Cloudflare builds the image; no Docker needed). See README.md.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "mwf-demo",
+  "name": "mwf-movingwalloffire",
   "main": "src/index.js",
   "compatibility_date": "2026-11-01",
   "observability": { "enabled": true },

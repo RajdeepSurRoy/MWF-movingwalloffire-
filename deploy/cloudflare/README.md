@@ -4,7 +4,7 @@ The demo is one container (built from the repo's [Dockerfile](../../Dockerfile))
 
 | Piece | Where |
 |---|---|
-| Public URL | `https://mwf-demo.<your-subdomain>.workers.dev` (the Worker) |
+| Public URL | `https://mwf-movingwalloffire.<your-subdomain>.workers.dev` (the Worker) |
 | Container | `standard-1` (½ vCPU, 4 GiB RAM), no Internet access, sleeps after 30 idle minutes |
 | Data | Inside the container, reset whenever it sleeps or is redeployed. The console shows runs since it last woke up |
 | Secrets | None needed. The demo's MWF keys are created inside the container at startup and never leave it |
@@ -13,7 +13,7 @@ The demo is one container (built from the repo's [Dockerfile](../../Dockerfile))
 
 1. **Account.** One of you creates the Cloudflare account and switches on the **Workers Paid** plan ($5/month; Containers need it). To share it, invite the other person under **Manage Account → Members**. Don't share one login.
 2. **Create the Worker from GitHub.** Go to **Workers & Pages → Create → Import a repository**. Pick this repository and set:
-   - **Root directory:** `deploy/cloudflare`
+   - **Root directory:** `deploy/cloudflare` (the Worker must be named `mwf-movingwalloffire`, as in wrangler.jsonc)
    - **Build command:** `npm ci`
    - **Deploy command:** `npx wrangler deploy`
    - **Production branch:** `main`
